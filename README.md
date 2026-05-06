@@ -63,12 +63,12 @@ npx @insforge/cli logout
 
 All commands support the following flags:
 
-| Flag | Description |
-|------|-------------|
-| `--json` | Output in JSON format (useful for scripts and AI agents) |
-| `--project-id <id>` | Override the linked project ID |
-| `--api-url <url>` | Override the Platform API URL |
-| `-y, --yes` | Skip confirmation prompts |
+| Flag                | Description                                              |
+| ------------------- | -------------------------------------------------------- |
+| `--json`            | Output in JSON format (useful for scripts and AI agents) |
+| `--project-id <id>` | Override the linked project ID                           |
+| `--api-url <url>`   | Override the Platform API URL                            |
+| `-y, --yes`         | Skip confirmation prompts                                |
 
 ## Commands
 
@@ -149,9 +149,11 @@ npx @insforge/cli logs <source> [options]
 **Sources:** `insforge.logs`, `postgREST.logs`, `postgres.logs`, `function.logs`
 
 **Options:**
+
 - `--limit <n>`: Number of log entries to return (default: 20)
 
 **Examples:**
+
 ```bash
 npx @insforge/cli logs insforge.logs
 npx @insforge/cli logs postgres.logs --limit 50
@@ -170,6 +172,7 @@ npx @insforge/cli docs [feature] [language]
 **Languages:** `typescript`, `swift`, `kotlin`, `rest-api`
 
 **Examples:**
+
 ```bash
 # List all available docs
 npx @insforge/cli docs
@@ -413,7 +416,7 @@ npx @insforge/cli deployments cancel abc-123
 
 ### Payments — `npx @insforge/cli payments`
 
-Manage the Stripe payments foundation for the linked InsForge project. These commands are intended for developers and agents configuring Stripe keys, syncing catalog state, and managing products/prices. Runtime checkout and customer portal calls should usually be made from the app via the SDK.
+Manage the Stripe payments foundation for the linked InsForge project. These commands are intended for developers and agents configuring Stripe keys, syncing catalog state, inspecting mirrored customers, and managing products/prices. Runtime checkout and customer portal calls should usually be made from the app via the SDK.
 
 #### `npx @insforge/cli payments status`
 
@@ -437,7 +440,7 @@ npx @insforge/cli payments config remove test -y
 
 #### `npx @insforge/cli payments sync`
 
-Sync Stripe products, prices, and subscriptions from configured environments.
+Sync Stripe products, prices, customers, and subscriptions from configured environments.
 
 ```bash
 npx @insforge/cli payments sync
@@ -451,6 +454,24 @@ Create or recreate the InsForge-managed Stripe webhook endpoint for an environme
 
 ```bash
 npx @insforge/cli payments webhooks configure test
+```
+
+#### `npx @insforge/cli payments catalog --environment <environment>`
+
+Inspect mirrored Stripe products and prices for one environment.
+
+```bash
+npx @insforge/cli payments catalog --environment test
+npx @insforge/cli payments catalog --environment test --json
+```
+
+#### `npx @insforge/cli payments customers`
+
+List mirrored Stripe customers for admin/debugging workflows.
+
+```bash
+npx @insforge/cli payments customers --environment test
+npx @insforge/cli payments customers --environment test --limit 20 --json
 ```
 
 #### `npx @insforge/cli payments products`
@@ -637,19 +658,19 @@ Skill files are written to per-agent directories (e.g. `.claude/`, `.cursor/`, `
 
 ## Analytics
 
-The CLI reports anonymous usage events to [PostHog](https://posthog.com) so we can understand which features are being used and prioritize improvements. 
+The CLI reports anonymous usage events to [PostHog](https://posthog.com) so we can understand which features are being used and prioritize improvements.
 
 Analytics are enabled by default in the published npm package. If you build the CLI from source without setting `POSTHOG_API_KEY` at build time, analytics become a no-op automatically.
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `INSFORGE_ACCESS_TOKEN` | Override the stored access token |
-| `INSFORGE_PROJECT_ID` | Override the linked project ID |
-| `INSFORGE_API_URL` | Override the Platform API URL |
-| `INSFORGE_EMAIL` | Email for non-interactive login |
-| `INSFORGE_PASSWORD` | Password for non-interactive login |
+| Variable                | Description                        |
+| ----------------------- | ---------------------------------- |
+| `INSFORGE_ACCESS_TOKEN` | Override the stored access token   |
+| `INSFORGE_PROJECT_ID`   | Override the linked project ID     |
+| `INSFORGE_API_URL`      | Override the Platform API URL      |
+| `INSFORGE_EMAIL`        | Email for non-interactive login    |
+| `INSFORGE_PASSWORD`     | Password for non-interactive login |
 
 ## Non-Interactive / CI Usage
 
@@ -674,14 +695,14 @@ npx @insforge/cli storage upload ./dist/bundle.js --bucket assets --key "v1.2.0/
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Authentication failure |
-| 3 | Project not linked (run `npx @insforge/cli link` first) |
-| 4 | Resource not found |
-| 5 | Permission denied |
+| Code | Meaning                                                 |
+| ---- | ------------------------------------------------------- |
+| 0    | Success                                                 |
+| 1    | General error                                           |
+| 2    | Authentication failure                                  |
+| 3    | Project not linked (run `npx @insforge/cli link` first) |
+| 4    | Resource not found                                      |
+| 5    | Permission denied                                       |
 
 ## Development
 
@@ -714,14 +735,17 @@ npm run test:integration:real
 ```
 
 Prerequisites:
+
 - Logged in (`npx @insforge/cli login`) so `~/.insforge/credentials.json` exists
 - Linked project in this repo (`npx @insforge/cli link`) so `.insforge/project.json` exists
 
 Optional environment variables:
+
 - `INSFORGE_API_URL`: Platform API URL override (defaults to `https://api.insforge.dev`)
 - `INTEGRATION_LOG_SOURCE`: Log source for `logs` test (default `insforge.logs`)
 
 Current real-project checks:
+
 - `whoami --json`
 - `metadata --json`
 - `logs <source> --json`
