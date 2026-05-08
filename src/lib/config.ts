@@ -102,6 +102,15 @@ export function saveProjectConfig(config: ProjectConfig): void {
   writeFileSync(getLocalConfigFile(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
+/**
+ * Canonical OSS host URL for a cloud project. Always includes the `https://`
+ * scheme — `oss_host` is fed straight into `fetch()`, which rejects bare
+ * hostnames with "Failed to parse URL".
+ */
+export function buildOssHost(appkey: string, region: string): string {
+  return `https://${appkey}.${region}.insforge.app`;
+}
+
 // --- Resolved values (env vars > flags > config) ---
 
 export function getPlatformApiUrl(override?: string): string {
