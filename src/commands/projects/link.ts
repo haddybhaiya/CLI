@@ -68,7 +68,7 @@ async function runNpmSetupIfPresent(): Promise<void> {
 export function registerProjectLinkCommand(program: Command): void {
   program
     .command('link')
-    .description('Link current directory to an InsForge project')
+    .description('Link current directory to an InsForge project (no args: installs agent skills only)')
     .option('--project-id <id>', 'Project ID to link')
     .option('--org-id <id>', 'Organization ID')
     .option('--template <template>', 'Download a template after linking: react, nextjs, chatbot, crm, e-commerce, todo')
@@ -94,6 +94,35 @@ export function registerProjectLinkCommand(program: Command): void {
       try {
         if (opts.template && !validTemplates.includes(opts.template)) {
           throw new CLIError(`Invalid template "${opts.template}". Valid options: ${validTemplates.join(', ')}`);
+        }
+
+        // Skills-only fast path: bare `link` with no args installs agent skills
+        // into the current directory without auth, org/project picker, or
+        // writing .insforge/project.json. The agent walks the user through
+        // provisioning later, when it actually needs InsForge backend services.
+        const isSkillsOnly = Object.values(opts).every((v) => v === undefined);
+
+        if (isSkillsOnly) {
+          try {
+            await installSkills(json);
+            trackCommand('link', 'skills-only', { skills_only: true });
+            await reportCliUsage('cli.link_skills_only', true, 1);
+
+            if (json) {
+              outputJson({ success: true, skills_only: true });
+            } else {
+              clack.note(
+                `Open your coding agent (Claude Code, Codex, Cursor, etc.) and ask it to build something. It will walk you through provisioning an InsForge project when needed.`,
+                "What's next",
+              );
+            }
+            return;
+          } catch (err) {
+            await reportCliUsage('cli.link_skills_only', false);
+            await shutdownAnalytics();
+            handleError(err, json);
+            return;
+          }
         }
 
         if (opts.apiBaseUrl || opts.apiKey) {
