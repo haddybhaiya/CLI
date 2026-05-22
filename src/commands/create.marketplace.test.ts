@@ -2,13 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { downloadMarketplaceTemplate, reportMarketplaceDownload } from './create';
-import type { ProjectConfig } from '../types';
+import { reportMarketplaceDownload } from './create';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const createSource: string = readFileSync(join(here, 'create.ts'), 'utf8');
-
-const dummyProjectConfig = {} as ProjectConfig;
 
 describe('reportMarketplaceDownload', () => {
   const fetchMock = vi.fn();
@@ -58,38 +55,6 @@ describe('reportMarketplaceDownload', () => {
   });
 });
 
-describe('downloadMarketplaceTemplate slug validation', () => {
-  // Slug must shape-match the registry regex before we touch the filesystem.
-  // This blocks path traversal (../, /abs, etc.) before path.join can be abused.
-
-  it('rejects parent-directory traversal', async () => {
-    await expect(
-      downloadMarketplaceTemplate('../etc', dummyProjectConfig, true),
-    ).rejects.toThrow(/Invalid --marketplace slug/);
-  });
-
-  it('rejects absolute path slugs', async () => {
-    await expect(
-      downloadMarketplaceTemplate('/etc/passwd', dummyProjectConfig, true),
-    ).rejects.toThrow(/Invalid --marketplace slug/);
-  });
-
-  it('rejects slugs with uppercase or special chars', async () => {
-    await expect(
-      downloadMarketplaceTemplate('FooBar', dummyProjectConfig, true),
-    ).rejects.toThrow(/Invalid --marketplace slug/);
-    await expect(
-      downloadMarketplaceTemplate('foo bar', dummyProjectConfig, true),
-    ).rejects.toThrow(/Invalid --marketplace slug/);
-  });
-
-  it('rejects empty slug', async () => {
-    await expect(
-      downloadMarketplaceTemplate('', dummyProjectConfig, true),
-    ).rejects.toThrow(/Invalid --marketplace slug/);
-  });
-});
-
 describe('--marketplace flag wiring', () => {
   // These tests read the source of create.ts and assert structural invariants
   // (presence of mutual-exclusion check, branch ordering, absence of PostHog
@@ -103,10 +68,11 @@ describe('--marketplace flag wiring', () => {
   });
 
   it('validates the slug at action entry before requireAuth (no orphaned project)', () => {
-    // The action handler must reject a bad slug BEFORE auth + project creation.
-    // Verify the regex check appears before the `await requireAuth(` call so
-    // the defense-in-depth check inside downloadMarketplaceTemplate is not the
-    // only line of defense.
+    // Slug regex MUST run before auth + project creation, otherwise a bad
+    // slug throws after the platform project already exists. With the
+    // standalone downloadMarketplaceTemplate function gone (marketplace now
+    // reuses downloadGitHubTemplate), the action-level check is the only
+    // line of defense — its position is load-bearing.
     const slugCheckIdx = createSource.indexOf(
       'SAFE_MARKETPLACE_SLUG.test(opts.marketplace',
     );
@@ -122,11 +88,11 @@ describe('--marketplace flag wiring', () => {
     expect(githubIdx).toBeGreaterThan(marketplaceIdx);
   });
 
-  it('gates reportMarketplaceDownload on the downloaded boolean', () => {
-    // The counter ping must only fire when downloadMarketplaceTemplate returns
+  it('gates reportMarketplaceDownload on the downloaded boolean from downloadGitHubTemplate', () => {
+    // The counter ping must only fire when downloadGitHubTemplate returns
     // true — a swallowed network/clone failure (return false) must NOT bump
     // the marketplace's install count.
-    expect(createSource).toMatch(/const downloaded = await downloadMarketplaceTemplate/);
+    expect(createSource).toMatch(/const downloaded = await downloadGitHubTemplate/);
     expect(createSource).toMatch(/if \(downloaded\)[\s\S]{0,80}reportMarketplaceDownload/);
   });
 

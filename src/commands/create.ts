@@ -372,10 +372,11 @@ export function registerCreateCommand(program: Command): void {
         // 7. Download template or seed env for blank projects
         const githubTemplates = ['chatbot', 'crm', 'e-commerce', 'nextjs', 'react', 'todo'];
         if (opts.marketplace) {
-          // Counter only fires if the template actually landed on disk —
-          // a swallowed network/clone failure returns false so we don't
-          // record phantom installs in the marketplace's download stats.
-          const downloaded = await downloadMarketplaceTemplate(
+          // Marketplace reuses downloadGitHubTemplate — same git-clone + copy +
+          // env-seed + db_init flow. Slug was already validated at action
+          // entry; counter only fires when the boolean comes back true so a
+          // swallowed clone failure doesn't record a phantom install.
+          const downloaded = await downloadGitHubTemplate(
             opts.marketplace as string,
             projectConfig,
             json,
@@ -623,7 +624,7 @@ export async function downloadGitHubTemplate(
   templateName: string,
   projectConfig: ProjectConfig,
   json: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const s = !json ? clack.spinner() : null;
   s?.start(`Downloading ${templateName} template...`);
 
@@ -715,6 +716,12 @@ export async function downloadGitHubTemplate(
         }
       }
     }
+
+    // Reached only after clone + copy + (optional) env seeding + (optional)
+    // db_init.sql all completed without throwing. Callers (currently the
+    // --marketplace path) gate the marketplace download counter on this
+    // boolean so swallowed failures below don't count as installs.
+    return true;
   } catch (err) {
     s?.stop(`${templateName} template download failed`);
     const msg = `Failed to download ${templateName} template: ${(err as Error).message}`;
@@ -723,129 +730,6 @@ export async function downloadGitHubTemplate(
     } else {
       clack.log.warn(msg);
       clack.log.info('You can manually clone from: https://github.com/InsForge/insforge-templates');
-    }
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-export async function downloadMarketplaceTemplate(
-  slug: string,
-  projectConfig: ProjectConfig,
-  json: boolean,
-): Promise<boolean> {
-  if (!SAFE_MARKETPLACE_SLUG.test(slug)) {
-    throw new CLIError(
-      `Invalid --marketplace slug "${slug}". Slugs must match ${SAFE_MARKETPLACE_SLUG}.\n` +
-        `Browse available templates: https://insforge.dev/templates`,
-    );
-  }
-
-  const s = !json ? clack.spinner() : null;
-  s?.start(`Downloading marketplace template "${slug}"...`);
-
-  const tempDir = path.join(tmpdir(), `insforge-marketplace-${Date.now()}`);
-
-  try {
-    await fs.mkdir(tempDir, { recursive: true });
-
-    // Marketplace always pulls from main of the canonical InsForge templates
-    // repo. No env-var override — contributors testing an unmerged template
-    // should validate locally (`npx @insforge/cli create --template <name>`
-    // still honours INSFORGE_TEMPLATES_BRANCH for that workflow) rather than
-    // route through the public marketplace command.
-    await execFileAsync(
-      'git',
-      ['clone', '--depth', '1', '--', 'https://github.com/InsForge/insforge-templates.git', '.'],
-      {
-        cwd: tempDir,
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 60_000,
-      },
-    );
-
-    const templateDir = path.join(tempDir, slug);
-    const stat = await fs.stat(templateDir).catch(() => null);
-    if (!stat?.isDirectory()) {
-      throw new Error(
-        `Template "${slug}" not found.\nBrowse available templates: https://insforge.dev/templates`,
-      );
-    }
-
-    s?.message('Copying template files...');
-    const cwd = process.cwd();
-    await copyDir(templateDir, cwd);
-
-    // Seed .env.local from .env.example (same logic as downloadGitHubTemplate).
-    const envExamplePath = path.join(cwd, '.env.example');
-    const envExampleExists = await fs.stat(envExamplePath).catch(() => null);
-    if (envExampleExists) {
-      const anonKey = await getAnonKey();
-      const envExample = await fs.readFile(envExamplePath, 'utf-8');
-      const envFinal = envExample.replace(
-        /^([A-Z][A-Z0-9_]*=)(.*)$/gm,
-        (_, prefix: string, _value: string) => {
-          const key = prefix.slice(0, -1);
-          if (/INSFORGE.*(URL|BASE_URL)$/.test(key)) return `${prefix}${projectConfig.oss_host}`;
-          if (/INSFORGE.*ANON_KEY$/.test(key)) return `${prefix}${anonKey}`;
-          if (key === 'NEXT_PUBLIC_APP_URL') {
-            return `${prefix}https://${projectConfig.appkey}.insforge.site`;
-          }
-          return `${prefix}${_value}`;
-        },
-      );
-      const envLocalPath = path.join(cwd, '.env.local');
-      try {
-        await fs.writeFile(envLocalPath, envFinal, { flag: 'wx' });
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
-          if (!json) clack.log.warn('.env.local already exists; skipping env seeding.');
-        } else {
-          throw e;
-        }
-      }
-    }
-
-    s?.stop(`Marketplace template "${slug}" downloaded`);
-
-    // Auto-run db_init.sql if present (parity with downloadGitHubTemplate).
-    const migrationPath = path.join(cwd, 'migrations', 'db_init.sql');
-    const migrationExists = await fs.stat(migrationPath).catch(() => null);
-    if (migrationExists) {
-      const dbSpinner = !json ? clack.spinner() : null;
-      dbSpinner?.start('Running database migrations...');
-      try {
-        const sql = await fs.readFile(migrationPath, 'utf-8');
-        await runRawSql(sql, true);
-        dbSpinner?.stop('Database migrations applied');
-      } catch (err) {
-        dbSpinner?.stop('Database migration failed');
-        if (!json) {
-          clack.log.warn(`Migration failed: ${(err as Error).message}`);
-        } else {
-          throw err;
-        }
-      }
-    }
-
-    // Reached only after clone + copy + (optional) env seeding + (optional)
-    // db_init.sql all completed without throwing. Returning true here lets
-    // the call site decide whether to fire the download counter; a swallowed
-    // failure below returns false so we don't record phantom installs.
-    return true;
-  } catch (err) {
-    s?.stop(`Marketplace template "${slug}" download failed`);
-    if (err instanceof CLIError) {
-      throw err;
-    }
-    const msg = `Failed to download marketplace template "${slug}": ${(err as Error).message}`;
-    if (json) {
-      console.error(JSON.stringify({ warning: msg }));
-    } else {
-      clack.log.warn(msg);
-      clack.log.info(
-        `You can manually clone from: https://github.com/InsForge/insforge-templates/tree/main/${slug}`,
-      );
     }
     return false;
   } finally {
