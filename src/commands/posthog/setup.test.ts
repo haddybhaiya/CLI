@@ -11,6 +11,7 @@ vi.mock('../../lib/api/posthog.js', () => apiMock);
 const configMock = vi.hoisted(() => ({
   getProjectConfig: vi.fn(() => ({ project_id: 'p1', project_name: 'Test Project' })),
   getAccessToken: vi.fn(() => 'tok'),
+  FAKE_PROJECT_ID: 'fa4e0000-1234-5678-90ab-cd1234567890',
 }));
 vi.mock('../../lib/config.js', () => configMock);
 

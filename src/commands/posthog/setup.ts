@@ -16,6 +16,7 @@ import {
   startPosthogCliFlow,
 } from '../../lib/api/posthog.js';
 import { outputJson, outputSuccess } from '../../lib/output.js';
+import { trackPosthog, shutdownAnalytics } from '../../lib/analytics.js';
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -52,6 +53,8 @@ export function registerPosthogSetupCommand(program: Command): void {
         }
       } catch (err) {
         handleError(err, json);
+      } finally {
+        await shutdownAnalytics();
       }
     });
 }
@@ -82,6 +85,10 @@ async function runSetup(opts: RunSetupOpts): Promise<SetupResult> {
   if (!token) {
     throw new AuthError('Not logged in. Run `insforge login` first.');
   }
+
+  // Step 2 of the "dashboard connect → CLI posthog setup" funnel; pairs
+  // with backend `posthog_connect_started` joined on project_id.
+  trackPosthog('setup', proj);
 
   if (!opts.json) {
     clack.intro('PostHog setup');
