@@ -14,6 +14,12 @@ const configMock = vi.hoisted(() => ({
 }));
 vi.mock('../../lib/config.js', () => configMock);
 
+const analyticsMock = vi.hoisted(() => ({
+  trackPosthog: vi.fn(),
+  shutdownAnalytics: vi.fn(async () => {}),
+}));
+vi.mock('../../lib/analytics.js', () => analyticsMock);
+
 vi.mock('../../lib/prompts.js', () => ({ isInteractive: false }));
 
 // `open` is loaded dynamically inside runConnectFlow; mock so the real browser
@@ -81,6 +87,8 @@ beforeEach(() => {
   outputMock.outputJson.mockReset();
   outputMock.outputSuccess.mockReset();
   clackNoteMock.mockReset();
+  analyticsMock.trackPosthog.mockReset();
+  analyticsMock.shutdownAnalytics.mockClear();
   configMock.getProjectConfig.mockReturnValue({ project_id: 'p1', project_name: 'Test Project' });
   configMock.getAccessToken.mockReturnValue('tok');
 });
@@ -173,6 +181,34 @@ describe('posthog setup', () => {
       expect(payload.success).toBe(true);
       expect(payload.wizardSkipped).toBe(true);
       expect(payload.wizardCommand).toMatch(/^npx(\.cmd)? -y @posthog\/wizard@latest$/);
+    });
+  });
+
+  describe('analytics', () => {
+    it('fires cli_posthog_invoked with the project config and flushes on success', async () => {
+      apiMock.startPosthogCliFlow.mockResolvedValue({ type: 'connected' });
+      apiMock.fetchPosthogConnection.mockResolvedValue({
+        kind: 'connected',
+        connection: { apiKey: 'phc_', host: 'h', posthogProjectId: '1' },
+      });
+
+      await runSetup(['--skip-browser']);
+
+      expect(analyticsMock.trackPosthog).toHaveBeenCalledOnce();
+      expect(analyticsMock.trackPosthog).toHaveBeenCalledWith(
+        'setup',
+        expect.objectContaining({ project_id: 'p1' }),
+      );
+      expect(analyticsMock.shutdownAnalytics).toHaveBeenCalledOnce();
+    });
+
+    it('still flushes analytics when setup fails', async () => {
+      apiMock.startPosthogCliFlow.mockResolvedValue({ type: 'connected' });
+      apiMock.fetchPosthogConnection.mockResolvedValue({ kind: 'not-connected' });
+
+      await runSetup(['--skip-browser']);
+
+      expect(analyticsMock.shutdownAnalytics).toHaveBeenCalledOnce();
     });
   });
 });

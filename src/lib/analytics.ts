@@ -61,6 +61,24 @@ export function trackPayments(
   });
 }
 
+// Step 2 of the "dashboard connect → CLI posthog setup" funnel; pair with
+// backend `posthog_connect_started` joined on project_id.
+export function trackPosthog(
+  subcommand: string,
+  config: ProjectConfig,
+  properties?: Record<string, unknown>,
+): void {
+  captureEvent(config.project_id, 'cli_posthog_invoked', {
+    subcommand,
+    project_id: config.project_id,
+    project_name: config.project_name,
+    org_id: config.org_id,
+    region: config.region,
+    oss_mode: config.project_id === FAKE_PROJECT_ID,
+    ...properties,
+  });
+}
+
 // Config commands (apply/plan/export) operate against an OSS backend and may
 // run without a linked cloud project, so the ProjectConfig is optional.
 // Pure-OSS runs fall back to FAKE_PROJECT_ID as the distinct ID — same
