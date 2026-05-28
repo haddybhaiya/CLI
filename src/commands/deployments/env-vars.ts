@@ -32,12 +32,9 @@ export function registerDeploymentsEnvVarsCommand(deploymentsCmd: Command): void
 
         if (json) {
           outputJson(data);
+        } else if (!envVars.length) {
+          console.log('No environment variables found.');
         } else {
-          if (!envVars.length) {
-            console.log('No environment variables found.');
-            await trackDeploymentUsage('env.list', true);
-            return;
-          }
           outputTable(
             ['ID', 'Key', 'Type', 'Updated At'],
             envVars.map((v) => [

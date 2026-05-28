@@ -12,17 +12,15 @@ export async function trackDeploymentUsage(
   properties: DeploymentCommandTelemetry = {},
 ): Promise<void> {
   try {
-    try {
-      const config = getProjectConfig();
-      if (config) {
-        trackDeployments(subcommand, config, {
-          success,
-          ...properties,
-        });
-      }
-    } catch {
-      // Telemetry should never affect command behavior.
+    const config = getProjectConfig();
+    if (config) {
+      trackDeployments(subcommand, config, {
+        success,
+        ...properties,
+      });
     }
+  } catch {
+    // Telemetry should never affect command behavior.
   } finally {
     await shutdownAnalytics();
   }

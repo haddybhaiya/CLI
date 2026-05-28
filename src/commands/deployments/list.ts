@@ -30,12 +30,9 @@ export function registerDeploymentsListCommand(deploymentsCmd: Command): void {
 
         if (json) {
           outputJson(raw);
+        } else if (!deployments.length) {
+          console.log('No deployments found.');
         } else {
-          if (!deployments.length) {
-            console.log('No deployments found.');
-            await trackDeploymentUsage('list', true);
-            return;
-          }
           outputTable(
             ['ID', 'Status', 'Provider', 'URL', 'Created'],
             deployments.map((d) => [

@@ -124,17 +124,15 @@ export async function trackPaymentUsage(
   properties: PaymentCommandTelemetry = {},
 ): Promise<void> {
   try {
-    try {
-      const config = getProjectConfig();
-      if (config) {
-        trackPayments(subcommand, config, {
-          success,
-          ...properties,
-        });
-      }
-    } catch {
-      // Telemetry should never affect command behavior.
+    const config = getProjectConfig();
+    if (config) {
+      trackPayments(subcommand, config, {
+        success,
+        ...properties,
+      });
     }
+  } catch {
+    // Telemetry should never affect command behavior.
   } finally {
     await shutdownAnalytics();
   }
