@@ -4,10 +4,16 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
+import { ossFetch } from '../../lib/api/oss.js';
 import { requireAuth } from '../../lib/credentials.js';
 import { handleError, getRootOpts, CLIError } from '../../lib/errors.js';
 import { stringifyConfigToml } from '../../lib/config-toml.js';
-import { configFromConfigState, loadConfigState } from '../../lib/config-metadata.js';
+import {
+  configFromMetadata,
+  type RawMetadataResponse,
+  type RawRetentionConfig,
+  type RawStorageConfig,
+} from '../../lib/config-metadata.js';
 import { reportCliUsage } from '../../lib/skills.js';
 import { trackConfig, shutdownAnalytics } from '../../lib/analytics.js';
 import { getProjectConfig } from '../../lib/config.js';
@@ -52,10 +58,19 @@ export function registerConfigExportCommand(cfg: Command): void {
           }
         }
 
-        // Field detection lives in config-metadata.ts alongside liveFromConfigState
-        // so apply/plan/export read the same backend state the same way.
-        const state = await loadConfigState();
-        const { config, skipped } = configFromConfigState(state);
+        const res = await ossFetch('/api/metadata');
+        const raw = (await res.json()) as RawMetadataResponse;
+        const [storageConfig, realtimeConfig, schedulesConfig] = await Promise.all([
+          fetchOptionalConfig<RawStorageConfig>('/api/storage/config'),
+          fetchOptionalConfig<RawRetentionConfig>('/api/realtime/config'),
+          fetchOptionalConfig<RawRetentionConfig>('/api/schedules/config'),
+        ]);
+
+        const { config, skipped } = configFromMetadata(raw, {
+          storageConfig,
+          realtimeConfig,
+          schedulesConfig,
+        });
 
         const toml = stringifyConfigToml(config);
         writeFileSync(target, toml, 'utf8');
@@ -94,4 +109,22 @@ export function registerConfigExportCommand(cfg: Command): void {
         await shutdownAnalytics();
       }
     });
+}
+
+async function fetchOptionalConfig<T>(path: string): Promise<T | undefined> {
+  try {
+    const res = await ossFetch(path);
+    return (await res.json()) as T;
+  } catch (err) {
+    if (isMissingOptionalEndpoint(err)) return undefined;
+    throw err;
+  }
+}
+
+function isMissingOptionalEndpoint(err: unknown): boolean {
+  return (
+    err instanceof CLIError &&
+    err.statusCode === 404 &&
+    (err.code === undefined || err.code === 'NOT_FOUND')
+  );
 }

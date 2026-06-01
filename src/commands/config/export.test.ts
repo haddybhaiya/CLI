@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerConfigExportCommand } from './export.js';
+import { CLIError } from '../../lib/errors.js';
 import type * as ErrorsModule from '../../lib/errors.js';
 
 let nextMetadataResponse: unknown = {};
@@ -16,6 +17,7 @@ const ossFetchMock = vi.fn(async (path: string) => {
   if (path === '/api/storage/config') body = nextStorageConfigResponse ?? {};
   if (path === '/api/realtime/config') body = nextRealtimeConfigResponse ?? {};
   if (path === '/api/schedules/config') body = nextSchedulesConfigResponse ?? {};
+  if (body instanceof Error) throw body;
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -184,6 +186,46 @@ describe('config export (capability probe)', () => {
     expect(written).toContain('disable_signup = true');
     expect(written).toContain('[storage]');
     expect(written).toContain('retention_days = 0');
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('skips optional endpoint-backed sections on route-level 404s', async () => {
+    nextMetadataResponse = {
+      auth: {
+        allowedRedirectUrls: [],
+        disableSignup: false,
+      },
+    };
+    nextStorageConfigResponse = new CLIError('NOT_FOUND', 1, 'NOT_FOUND', 404);
+    nextRealtimeConfigResponse = new CLIError('OSS request failed: 404', 1, undefined, 404);
+    nextSchedulesConfigResponse = { retentionDays: 14 };
+
+    const target = join(tmp, 'insforge.toml');
+    const program = makeProgram();
+    const docs = await runJson(program, [
+      '--json',
+      'config',
+      'export',
+      '--out',
+      target,
+      '--force',
+    ]);
+
+    const result = docs[0] as {
+      config: {
+        storage?: unknown;
+        realtime?: unknown;
+        schedules?: { retention_days?: number | null };
+      };
+      skipped: string[];
+    };
+    expect(result.config.storage).toBeUndefined();
+    expect(result.config.realtime).toBeUndefined();
+    expect(result.config.schedules).toEqual({ retention_days: 14 });
+    expect(result.skipped).toContain('storage.max_file_size_mb');
+    expect(result.skipped).toContain('realtime.retention_days');
+    expect(result.skipped).not.toContain('schedules.retention_days');
 
     rmSync(tmp, { recursive: true, force: true });
   });

@@ -11,8 +11,6 @@
 
 import type { InsforgeConfig } from './config-schema.js';
 import type { LiveConfig } from './config-diff.js';
-import { ossFetch } from './api/oss.js';
-import { CLIError } from './errors.js';
 
 /**
  * Raw shape of the backend's /api/metadata response. Only the keys this CLI
@@ -50,13 +48,6 @@ export interface RawRetentionConfig {
   retentionDays?: unknown;
 }
 
-export interface RawConfigState {
-  metadata: RawMetadataResponse;
-  storageConfig?: RawStorageConfig;
-  realtimeConfig?: RawRetentionConfig;
-  schedulesConfig?: RawRetentionConfig;
-}
-
 export interface RawMetadataResponse {
   auth?: RawAuthMetadata;
   // Cloud-only slice. Self-host or pre-#1259 backends omit the key
@@ -67,38 +58,10 @@ export interface RawMetadataResponse {
   };
 }
 
-export async function loadConfigState(): Promise<RawConfigState> {
-  const metadataRes = await ossFetch('/api/metadata');
-  const metadata = (await metadataRes.json()) as RawMetadataResponse;
-
-  const [storageConfig, realtimeConfig, schedulesConfig] = await Promise.all([
-    fetchOptionalJson<RawStorageConfig>('/api/storage/config'),
-    fetchOptionalJson<RawRetentionConfig>('/api/realtime/config'),
-    fetchOptionalJson<RawRetentionConfig>('/api/schedules/config'),
-  ]);
-
-  return {
-    metadata,
-    ...(storageConfig !== undefined ? { storageConfig } : {}),
-    ...(realtimeConfig !== undefined ? { realtimeConfig } : {}),
-    ...(schedulesConfig !== undefined ? { schedulesConfig } : {}),
-  };
-}
-
-async function fetchOptionalJson<T>(path: string): Promise<T | undefined> {
-  try {
-    const res = await ossFetch(path);
-    return (await res.json()) as T;
-  } catch (err) {
-    if (isOptionalEndpointUnsupported(err)) return undefined;
-    throw err;
-  }
-}
-
-function isOptionalEndpointUnsupported(err: unknown): boolean {
-  if (!(err instanceof CLIError)) return false;
-  const message = err.message.toLowerCase();
-  return message === 'oss request failed: 404' || message.startsWith('oss request failed: 404\n');
+export interface EndpointConfigResponses {
+  storageConfig?: RawStorageConfig;
+  realtimeConfig?: RawRetentionConfig;
+  schedulesConfig?: RawRetentionConfig;
 }
 
 /**
@@ -107,7 +70,10 @@ function isOptionalEndpointUnsupported(err: unknown): boolean {
  * "field not yet supported on this backend" and uses its own fallback
  * defaults when the file references a missing-on-live field.
  */
-export function liveFromMetadata(raw: RawMetadataResponse): LiveConfig {
+export function liveFromMetadata(
+  raw: RawMetadataResponse,
+  endpointConfig: EndpointConfigResponses = {},
+): LiveConfig {
   const live: LiveConfig = { auth: {} };
   // Guard against a malformed response (auth: "string" / number / null) —
   // the `in` operator throws a TypeError on non-objects, so refuse to read
@@ -188,23 +154,18 @@ export function liveFromMetadata(raw: RawMetadataResponse): LiveConfig {
       subdomain: typeof d.customSlug === 'string' && d.customSlug ? d.customSlug : null,
     };
   }
-  return live;
-}
 
-export function liveFromConfigState(state: RawConfigState): LiveConfig {
-  const live = liveFromMetadata(state.metadata);
-
-  const maxFileSizeMb = asNumber(state.storageConfig?.maxFileSizeMb);
+  const maxFileSizeMb = asNumber(endpointConfig.storageConfig?.maxFileSizeMb);
   if (maxFileSizeMb !== undefined) {
     live.storage = { max_file_size_mb: maxFileSizeMb };
   }
 
-  const realtimeRetention = asRetentionDays(state.realtimeConfig?.retentionDays);
+  const realtimeRetention = asRetentionDays(endpointConfig.realtimeConfig?.retentionDays);
   if (realtimeRetention !== undefined) {
     live.realtime = { retention_days: realtimeRetention };
   }
 
-  const schedulesRetention = asRetentionDays(state.schedulesConfig?.retentionDays);
+  const schedulesRetention = asRetentionDays(endpointConfig.schedulesConfig?.retentionDays);
   if (schedulesRetention !== undefined) {
     live.schedules = { retention_days: schedulesRetention };
   }
@@ -239,7 +200,10 @@ function asRetentionDays(v: unknown): number | null | undefined {
  * fields are considered present — the two MUST agree, otherwise re-applying
  * an export wouldn't round-trip cleanly. Update both together.
  */
-export function configFromMetadata(raw: RawMetadataResponse): {
+export function configFromMetadata(
+  raw: RawMetadataResponse,
+  endpointConfig: EndpointConfigResponses = {},
+): {
   config: InsforgeConfig;
   skipped: string[];
 } {
@@ -364,30 +328,21 @@ export function configFromMetadata(raw: RawMetadataResponse): {
     skipped.push('deployments.subdomain');
   }
 
-  return { config, skipped };
-}
-
-export function configFromConfigState(state: RawConfigState): {
-  config: InsforgeConfig;
-  skipped: string[];
-} {
-  const { config, skipped } = configFromMetadata(state.metadata);
-
-  const maxFileSizeMb = asNumber(state.storageConfig?.maxFileSizeMb);
+  const maxFileSizeMb = asNumber(endpointConfig.storageConfig?.maxFileSizeMb);
   if (maxFileSizeMb !== undefined) {
     config.storage = { max_file_size_mb: maxFileSizeMb };
   } else {
     skipped.push('storage.max_file_size_mb');
   }
 
-  const realtimeRetention = asRetentionDays(state.realtimeConfig?.retentionDays);
+  const realtimeRetention = asRetentionDays(endpointConfig.realtimeConfig?.retentionDays);
   if (realtimeRetention !== undefined) {
     config.realtime = { retention_days: realtimeRetention };
   } else {
     skipped.push('realtime.retention_days');
   }
 
-  const schedulesRetention = asRetentionDays(state.schedulesConfig?.retentionDays);
+  const schedulesRetention = asRetentionDays(endpointConfig.schedulesConfig?.retentionDays);
   if (schedulesRetention !== undefined) {
     config.schedules = { retention_days: schedulesRetention };
   } else {

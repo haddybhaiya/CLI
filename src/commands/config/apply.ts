@@ -11,12 +11,18 @@ import { parseConfigToml } from '../../lib/config-toml.js';
 import { diffConfig, type DiffChange } from '../../lib/config-diff.js';
 import { formatPlan } from '../../lib/config-format.js';
 import {
-  configSupports,
+  metadataSupports,
   changePath,
   authPasswordWireKey,
 } from '../../lib/config-capabilities.js';
 import { resolveEnvRef } from '../../lib/config-secrets.js';
-import { liveFromConfigState, loadConfigState } from '../../lib/config-metadata.js';
+import {
+  liveFromMetadata,
+  type EndpointConfigResponses,
+  type RawMetadataResponse,
+  type RawRetentionConfig,
+  type RawStorageConfig,
+} from '../../lib/config-metadata.js';
 import { reportCliUsage } from '../../lib/skills.js';
 import { trackConfig, shutdownAnalytics } from '../../lib/analytics.js';
 import { getProjectConfig } from '../../lib/config.js';
@@ -39,8 +45,25 @@ export function registerConfigApplyCommand(cfg: Command): void {
         const tomlSource = readFileSync(tomlPath, 'utf8');
         const file = parseConfigToml(tomlSource);
 
-        const state = await loadConfigState();
-        const live = liveFromConfigState(state);
+        const res = await ossFetch('/api/metadata');
+        const raw = (await res.json()) as RawMetadataResponse;
+        const endpointConfig: EndpointConfigResponses = {};
+        if (file.storage !== undefined) {
+          endpointConfig.storageConfig = await fetchOptionalConfig<RawStorageConfig>(
+            '/api/storage/config',
+          );
+        }
+        if (file.realtime !== undefined) {
+          endpointConfig.realtimeConfig = await fetchOptionalConfig<RawRetentionConfig>(
+            '/api/realtime/config',
+          );
+        }
+        if (file.schedules !== undefined) {
+          endpointConfig.schedulesConfig = await fetchOptionalConfig<RawRetentionConfig>(
+            '/api/schedules/config',
+          );
+        }
+        const live = liveFromMetadata(raw, endpointConfig);
 
         const result = diffConfig({ live, file });
         const approved = opts.autoApprove || yes;
@@ -107,7 +130,7 @@ export function registerConfigApplyCommand(cfg: Command): void {
         const skipped: Array<{ key: string; reason: string }> = [];
         for (const change of result.changes) {
           const path = changePath(change);
-          if (!configSupports(state, change)) {
+          if (!metadataSupports(raw, change, endpointConfig)) {
             skipped.push({
               key: path,
               reason: `your backend doesn't expose ${path} — upgrade the project to apply this section`,
@@ -162,6 +185,24 @@ export function registerConfigApplyCommand(cfg: Command): void {
         await shutdownAnalytics();
       }
     });
+}
+
+async function fetchOptionalConfig<T>(path: string): Promise<T | undefined> {
+  try {
+    const res = await ossFetch(path);
+    return (await res.json()) as T;
+  } catch (err) {
+    if (isMissingOptionalEndpoint(err)) return undefined;
+    throw err;
+  }
+}
+
+function isMissingOptionalEndpoint(err: unknown): boolean {
+  return (
+    err instanceof CLIError &&
+    err.statusCode === 404 &&
+    (err.code === undefined || err.code === 'NOT_FOUND')
+  );
 }
 
 async function applyChange(change: DiffChange): Promise<void> {

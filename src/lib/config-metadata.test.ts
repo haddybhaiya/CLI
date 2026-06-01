@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  configFromConfigState,
   configFromMetadata,
-  liveFromConfigState,
   liveFromMetadata,
 } from './config-metadata.js';
 
@@ -43,11 +41,11 @@ describe('liveFromMetadata', () => {
           min_length: 12,
           require_number: true,
           require_lowercase: true,
-        require_uppercase: true,
-        require_special_char: false,
-      },
-      disable_signup: true,
-      smtp: {
+          require_uppercase: true,
+          require_special_char: false,
+        },
+        disable_signup: true,
+        smtp: {
           enabled: true,
           host: 'smtp.gmail.com',
           port: 587,
@@ -138,31 +136,38 @@ describe('liveFromMetadata', () => {
 
 describe('configFromMetadata', () => {
   it('projects a full backend response onto InsforgeConfig with no skipped entries', () => {
-    const { config, skipped } = configFromMetadata({
-      auth: {
-        allowedRedirectUrls: ['https://a.com'],
-        requireEmailVerification: true,
-        verifyEmailMethod: 'link',
-        resetPasswordMethod: 'code',
-        passwordMinLength: 12,
-        requireNumber: true,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireSpecialChar: false,
-        disableSignup: true,
-        smtpConfig: {
-          enabled: false,
-          host: '',
-          port: 587,
-          username: '',
-          hasPassword: false,
-          senderEmail: '',
-          senderName: '',
-          minIntervalSeconds: 60,
+    const { config, skipped } = configFromMetadata(
+      {
+        auth: {
+          allowedRedirectUrls: ['https://a.com'],
+          requireEmailVerification: true,
+          verifyEmailMethod: 'link',
+          resetPasswordMethod: 'code',
+          passwordMinLength: 12,
+          requireNumber: true,
+          requireLowercase: true,
+          requireUppercase: true,
+          requireSpecialChar: false,
+          disableSignup: true,
+          smtpConfig: {
+            enabled: false,
+            host: '',
+            port: 587,
+            username: '',
+            hasPassword: false,
+            senderEmail: '',
+            senderName: '',
+            minIntervalSeconds: 60,
+          },
         },
+        deployments: { customSlug: 'my-app' },
       },
-      deployments: { customSlug: 'my-app' },
-    });
+      {
+        storageConfig: { maxFileSizeMb: 100 },
+        realtimeConfig: { retentionDays: null },
+        schedulesConfig: { retentionDays: 14 },
+      },
+    );
     expect(config.auth?.require_email_verification).toBe(true);
     expect(config.auth?.verify_email_method).toBe('link');
     expect(config.auth?.disable_signup).toBe(true);
@@ -190,6 +195,9 @@ describe('configFromMetadata', () => {
       'auth.smtp',
       'auth.verify_email_method',
       'deployments.subdomain',
+      'realtime.retention_days',
+      'schedules.retention_days',
+      'storage.max_file_size_mb',
     ]);
   });
 
@@ -270,10 +278,9 @@ describe('configFromMetadata', () => {
   });
 });
 
-describe('liveFromConfigState', () => {
+describe('liveFromMetadata — endpoint-backed config', () => {
   it('projects optional endpoint-backed config into LiveConfig', () => {
-    const live = liveFromConfigState({
-      metadata: { auth: { disableSignup: false } },
+    const live = liveFromMetadata({ auth: { disableSignup: false } }, {
       storageConfig: { maxFileSizeMb: 100 },
       realtimeConfig: { retentionDays: null },
       schedulesConfig: { retentionDays: 14 },
@@ -289,10 +296,12 @@ describe('liveFromConfigState', () => {
   });
 });
 
-describe('configFromConfigState', () => {
+describe('configFromMetadata — endpoint-backed config', () => {
   it('exports optional endpoint-backed config sections', () => {
-    const { config, skipped } = configFromConfigState({
-      metadata: { auth: { disableSignup: true }, deployments: { customSlug: null } },
+    const { config, skipped } = configFromMetadata({
+      auth: { disableSignup: true },
+      deployments: { customSlug: null },
+    }, {
       storageConfig: { maxFileSizeMb: 100 },
       realtimeConfig: { retentionDays: null },
       schedulesConfig: { retentionDays: 14 },

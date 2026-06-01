@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configSupports, metadataSupports, changePath } from './config-capabilities.js';
+import { metadataSupports, changePath } from './config-capabilities.js';
 import type { DiffChange } from './config-diff.js';
 
 const change: DiffChange = {
@@ -181,43 +181,48 @@ describe('changePath', () => {
       }),
     ).toBe('auth.password.min_length');
   });
-
 });
 
-describe('configSupports — optional endpoint-backed sections', () => {
-  it('supports storage, realtime, and schedules only when optional config keys are present', () => {
-    const state = {
-      metadata: { auth: {} },
-      storageConfig: { maxFileSizeMb: 50 },
-      realtimeConfig: { retentionDays: null },
-      schedulesConfig: { retentionDays: 7 },
-    };
+describe('metadataSupports — endpoint-backed sections', () => {
+  it('uses endpoint responses for storage, realtime, and schedules support', () => {
     expect(
-      configSupports(state, {
-        section: 'storage',
-        op: 'modify',
-        key: 'max_file_size_mb',
-        from: 50,
-        to: 100,
-      }),
+      metadataSupports(
+        { auth: {} },
+        {
+          section: 'storage',
+          op: 'modify',
+          key: 'max_file_size_mb',
+          from: 50,
+          to: 100,
+        },
+        { storageConfig: { maxFileSizeMb: 50 } },
+      ),
     ).toBe(true);
     expect(
-      configSupports(state, {
-        section: 'realtime',
-        op: 'modify',
-        key: 'retention_days',
-        from: null,
-        to: 7,
-      }),
+      metadataSupports(
+        { auth: {} },
+        {
+          section: 'realtime',
+          op: 'modify',
+          key: 'retention_days',
+          from: null,
+          to: 7,
+        },
+        { realtimeConfig: { retentionDays: null } },
+      ),
     ).toBe(true);
     expect(
-      configSupports(state, {
-        section: 'schedules',
-        op: 'modify',
-        key: 'retention_days',
-        from: 7,
-        to: 14,
-      }),
+      metadataSupports(
+        { auth: {} },
+        {
+          section: 'schedules',
+          op: 'modify',
+          key: 'retention_days',
+          from: 7,
+          to: 14,
+        },
+        { schedulesConfig: { retentionDays: 7 } },
+      ),
     ).toBe(true);
   });
 });

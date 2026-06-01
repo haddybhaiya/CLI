@@ -24,7 +24,7 @@
 // backend would defeat this probe.
 
 import type { DiffChange } from './config-diff.js';
-import type { RawConfigState, RawMetadataResponse } from './config-metadata.js';
+import type { EndpointConfigResponses } from './config-metadata.js';
 
 // The probe takes the metadata response loosely-typed: typed shapes from
 // callers (RawMetadataResponse) and Record<string, unknown> both satisfy
@@ -36,20 +36,16 @@ type RawMetadata = {
   deployments?: unknown;
 };
 
-type ConfigSupportInput = RawMetadata | RawConfigState;
-
 /**
  * True iff the backend's metadata response carries the field this change
  * targets. Used to skip unsupported changes before we'd PUT to an endpoint
  * that may silently drop the body.
  */
-export function metadataSupports(raw: RawMetadata, change: DiffChange): boolean {
-  return configSupports({ metadata: raw as RawMetadataResponse }, change);
-}
-
-export function configSupports(input: ConfigSupportInput, change: DiffChange): boolean {
-  const raw = getMetadata(input);
-  const state = isConfigState(input) ? input : undefined;
+export function metadataSupports(
+  raw: RawMetadata,
+  change: DiffChange,
+  endpointConfig: EndpointConfigResponses = {},
+): boolean {
   if (change.section === 'auth' && change.key === 'allowed_redirect_urls') {
     return hasAuthKey(raw, 'allowedRedirectUrls');
   }
@@ -78,13 +74,13 @@ export function configSupports(input: ConfigSupportInput, change: DiffChange): b
     return hasAuthKey(raw, 'smtpConfig');
   }
   if (change.section === 'storage' && change.key === 'max_file_size_mb') {
-    return hasConfigKey(state?.storageConfig, 'maxFileSizeMb');
+    return hasConfigKey(endpointConfig.storageConfig, 'maxFileSizeMb');
   }
   if (change.section === 'realtime' && change.key === 'retention_days') {
-    return hasConfigKey(state?.realtimeConfig, 'retentionDays');
+    return hasConfigKey(endpointConfig.realtimeConfig, 'retentionDays');
   }
   if (change.section === 'schedules' && change.key === 'retention_days') {
-    return hasConfigKey(state?.schedulesConfig, 'retentionDays');
+    return hasConfigKey(endpointConfig.schedulesConfig, 'retentionDays');
   }
   if (change.section === 'deployments' && change.key === 'subdomain') {
     // Presence-only probe: cloud backends always carry `customSlug` in the
@@ -101,20 +97,6 @@ export function configSupports(input: ConfigSupportInput, change: DiffChange): b
   const _exhaustive: never = change;
   void _exhaustive;
   return false;
-}
-
-function getMetadata(input: ConfigSupportInput): RawMetadata {
-  return isConfigState(input) ? input.metadata : input;
-}
-
-function isConfigState(input: ConfigSupportInput): input is RawConfigState {
-  return (
-    input !== null &&
-    typeof input === 'object' &&
-    'metadata' in input &&
-    input.metadata !== null &&
-    typeof input.metadata === 'object'
-  );
 }
 
 function hasAuthKey(raw: RawMetadata, key: string): boolean {
