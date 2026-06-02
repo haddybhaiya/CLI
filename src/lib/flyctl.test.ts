@@ -166,6 +166,23 @@ describe('ensureFlyctlAvailable', () => {
 // ─── flyctlBuildAndPush ───────────────────────────────────────────────────────
 
 describe('flyctlBuildAndPush', () => {
+  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stderrWriteSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(() => true);
+    stderrWriteSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
+    stderrWriteSpy.mockRestore();
+  });
+
   const baseOpts = {
     dir: '/tmp/app',
     appId: 'my-svc-proj-abc123',
@@ -295,9 +312,6 @@ describe('flyctlBuildAndPush', () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
 
-    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-
     setImmediate(() => {
       child.stdout!.emit('data', Buffer.from('build step 1/3\n'));
       child.stderr!.emit('data', Buffer.from('warn: deprecated flag\n'));
@@ -310,11 +324,8 @@ describe('flyctlBuildAndPush', () => {
 
     await flyctlBuildAndPush(baseOpts);
 
-    expect(stdoutSpy).toHaveBeenCalledWith('build step 1/3\n');
-    expect(stderrSpy).toHaveBeenCalledWith('warn: deprecated flag\n');
-
-    stdoutSpy.mockRestore();
-    stderrSpy.mockRestore();
+    expect(stdoutWriteSpy).toHaveBeenCalledWith('build step 1/3\n');
+    expect(stderrWriteSpy).toHaveBeenCalledWith('warn: deprecated flag\n');
   });
 
   // ─── fly.toml stub behavior ──────────────────────────────────────────────
