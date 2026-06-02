@@ -72,6 +72,11 @@ All commands support the following flags:
 
 ## Commands
 
+> The `orgs`, `projects`, and `records` command groups are registered but hidden
+> (`hidden: true` in `src/index.ts`) and are intentionally excluded from this
+> reference. Use `npx @insforge/cli list` instead of `orgs`/`projects`; `records`
+> is internal and not supported for direct use.
+
 ### Top-Level
 
 #### `npx @insforge/cli whoami`
@@ -99,7 +104,18 @@ Create a new InsForge project interactively.
 ```bash
 npx @insforge/cli create
 npx @insforge/cli create --name "my-app" --org-id <org-id> --region us-east
+npx @insforge/cli create --name "my-app" --template nextjs --auth better-auth   # scaffold from a built-in template
+npx @insforge/cli create --name "my-app" --marketplace <slug>                   # install a marketplace template
 ```
+
+**Options:**
+
+- `--name <name>`: Project name
+- `--org-id <id>`: Organization ID
+- `--region <region>`: Deployment region (`us-east`, `us-west`, `eu-central`, `ap-southeast`)
+- `--template <template>`: Built-in template (`react`, `nextjs`, `chatbot`, `crm`, `e-commerce`, `todo`, or `empty`)
+- `--marketplace <slug>`: Install a marketplace template by slug (browse: https://insforge.dev/templates)
+- `--auth <provider>`: Wire a third-party auth provider into the chosen template (currently: `better-auth`)
 
 #### `npx @insforge/cli link`
 
@@ -182,6 +198,66 @@ npx @insforge/cli docs instructions           # Show backend setup instructions
 npx @insforge/cli docs db typescript          # Show TypeScript database SDK docs
 npx @insforge/cli docs auth swift             # Show Swift auth SDK docs
 npx @insforge/cli docs storage rest-api       # Show REST API storage docs
+```
+
+---
+
+### Branch — `npx @insforge/cli branch`
+
+Manage backend branches of the currently linked project.
+
+#### `npx @insforge/cli branch list`
+
+List branches of the currently linked project.
+
+```bash
+npx @insforge/cli branch list
+npx @insforge/cli branch list --json
+```
+
+#### `npx @insforge/cli branch create <name>`
+
+Create a branch from the currently linked project.
+
+```bash
+npx @insforge/cli branch create feature-x
+npx @insforge/cli branch create feature-x --mode schema-only   # full | schema-only (default: full)
+npx @insforge/cli branch create feature-x --no-switch          # do not auto-switch context after creation
+```
+
+#### `npx @insforge/cli branch switch [name]`
+
+Switch this directory's context to a branch (or back to the parent project).
+
+```bash
+npx @insforge/cli branch switch feature-x
+npx @insforge/cli branch switch --parent   # switch back to the parent project
+```
+
+#### `npx @insforge/cli branch merge <name>`
+
+Merge a branch back to its parent project.
+
+```bash
+npx @insforge/cli branch merge feature-x
+npx @insforge/cli branch merge feature-x --dry-run            # compute the diff and print rendered SQL; do not apply
+npx @insforge/cli branch merge feature-x --save-sql diff.sql  # write rendered SQL preview to a file
+```
+
+#### `npx @insforge/cli branch reset <name>`
+
+Reset a branch's database back to T0 (the parent snapshot at branch creation).
+
+```bash
+npx @insforge/cli branch reset feature-x
+```
+
+#### `npx @insforge/cli branch delete <name>`
+
+Delete a branch.
+
+```bash
+npx @insforge/cli branch delete feature-x
 ```
 
 ---
@@ -276,6 +352,26 @@ Import database from a local SQL file.
 
 ```bash
 npx @insforge/cli db import schema.sql
+```
+
+#### `npx @insforge/cli db migrations`
+
+Manage database migration files.
+
+```bash
+npx @insforge/cli db migrations list          # list applied remote migrations
+npx @insforge/cli db migrations fetch         # fetch applied remote migrations into migrations/
+npx @insforge/cli db migrations new add_users # create a new local migration file
+npx @insforge/cli db migrations up --all      # apply all pending local migrations
+npx @insforge/cli db migrations up --to 20260101_add_users  # apply up to a version/file
+```
+
+#### `npx @insforge/cli db connection-string`
+
+Print the project Postgres connection URL (cloud projects only).
+
+```bash
+npx @insforge/cli db connection-string
 ```
 
 ---
@@ -424,6 +520,16 @@ Cancel a running deployment.
 
 ```bash
 npx @insforge/cli deployments cancel abc-123
+```
+
+#### `npx @insforge/cli deployments env`
+
+Manage deployment environment variables.
+
+```bash
+npx @insforge/cli deployments env list                       # list all deployment env vars
+npx @insforge/cli deployments env set API_URL https://api.example.com  # create or update a variable
+npx @insforge/cli deployments env delete <id>                # delete a variable by ID
 ```
 
 ---
@@ -639,6 +745,194 @@ Fetch execution logs for a specific schedule.
 ```bash
 npx @insforge/cli schedules logs <id>
 npx @insforge/cli schedules logs 123 --limit 100
+```
+
+---
+
+### Compute — `npx @insforge/cli compute`
+
+Manage compute services (Docker containers on Fly.io).
+
+#### `npx @insforge/cli compute list`
+
+List all compute services.
+
+```bash
+npx @insforge/cli compute list
+```
+
+#### `npx @insforge/cli compute get <id>`
+
+Get details of a compute service.
+
+```bash
+npx @insforge/cli compute get my-api
+```
+
+#### `npx @insforge/cli compute deploy [dir]`
+
+Deploy a compute service. Source mode runs a `flyctl` remote build and push (requires `flyctl` on PATH, no Docker needed); image mode deploys a pre-built image (no `flyctl`/Docker required).
+
+```bash
+# Source mode
+npx @insforge/cli compute deploy ./api --name my-api
+# Image mode
+npx @insforge/cli compute deploy --image registry.example.com/my-api:latest --name my-api
+# Common options
+npx @insforge/cli compute deploy ./api --name my-api \
+  --port 8080 --cpu shared-1x --memory 512 --region iad \
+  --env '{"LOG_LEVEL":"info"}'        # or --env-file .env
+```
+
+**Options:**
+
+- `--name <name>`: Service name (required)
+- `--image <url>`: Container image URL (image mode)
+- `--port <port>`: Container port (default: `8080`)
+- `--cpu <tier>`: CPU tier (default: `shared-1x`)
+- `--memory <mb>`: Memory in MB (default: `512`)
+- `--region <region>`: Deploy region (default: `iad`)
+- `--env <json>`: Environment variables as JSON
+- `--env-file <path>`: Load environment variables from a file
+- `--protocol <http|tcp>`: Service protocol (default: `http`)
+
+#### `npx @insforge/cli compute update <id>`
+
+Update a compute service.
+
+```bash
+npx @insforge/cli compute update my-api --memory 1024
+npx @insforge/cli compute update my-api --env-set LOG_LEVEL=debug   # set/update one var (repeatable)
+npx @insforge/cli compute update my-api --env-unset OLD_KEY         # remove one var (repeatable)
+```
+
+**Options:**
+
+- `--image <image>`: Container image URL
+- `--port <port>`: Container port
+- `--cpu <tier>`: CPU tier
+- `--memory <mb>`: Memory in MB
+- `--region <region>`: Deploy region
+- `--env <json>`: Environment variables as JSON (replaces ALL vars)
+- `--env-set <KEY=VALUE>`: Set/update one variable (repeatable, merges)
+- `--env-unset <KEY>`: Remove one variable (repeatable, merges)
+
+#### `npx @insforge/cli compute start <id>` / `stop <id>`
+
+Start a stopped, or stop a running, compute service.
+
+```bash
+npx @insforge/cli compute start my-api
+npx @insforge/cli compute stop my-api
+```
+
+#### `npx @insforge/cli compute events <id>`
+
+Get compute service machine events (start/stop/exit/restart).
+
+```bash
+npx @insforge/cli compute events my-api --limit 50
+```
+
+#### `npx @insforge/cli compute delete <id>`
+
+Delete a compute service and its Fly.io resources.
+
+```bash
+npx @insforge/cli compute delete my-api
+```
+
+---
+
+### Diagnose — `npx @insforge/cli diagnose`
+
+Backend diagnostics. Run with no subcommand for a full health report.
+
+```bash
+npx @insforge/cli diagnose
+npx @insforge/cli diagnose --ai "why is my database slow?"   # ask AI to analyze diagnostic data
+```
+
+#### `npx @insforge/cli diagnose advisor`
+
+Display latest advisor scan results and issues.
+
+```bash
+npx @insforge/cli diagnose advisor --severity critical --category security --limit 50
+```
+
+#### `npx @insforge/cli diagnose db`
+
+Run database health checks (connections, bloat, index usage, etc.).
+
+```bash
+npx @insforge/cli diagnose db
+npx @insforge/cli diagnose db --check connections,bloat
+```
+
+#### `npx @insforge/cli diagnose logs`
+
+Aggregate error-level logs from all backend sources.
+
+```bash
+npx @insforge/cli diagnose logs --source postgres --limit 100
+```
+
+#### `npx @insforge/cli diagnose metrics`
+
+Display EC2 instance metrics (CPU, memory, disk, network).
+
+```bash
+npx @insforge/cli diagnose metrics --range 6h
+```
+
+---
+
+### PostHog — `npx @insforge/cli posthog`
+
+Manage PostHog product analytics integration.
+
+#### `npx @insforge/cli posthog setup`
+
+Connect PostHog to your InsForge dashboard, then run the official PostHog wizard to wire it into your app.
+
+```bash
+npx @insforge/cli posthog setup
+npx @insforge/cli posthog setup --skip-browser   # only print the OAuth URL, do not auto-open the browser
+```
+
+---
+
+### Config — `npx @insforge/cli config`
+
+Manage `insforge.toml` (declarative project configuration).
+
+#### `npx @insforge/cli config export`
+
+Pull live project config and write `insforge.toml`.
+
+```bash
+npx @insforge/cli config export
+npx @insforge/cli config export --out insforge.toml --force
+```
+
+#### `npx @insforge/cli config plan`
+
+Show the diff between `insforge.toml` and live project state.
+
+```bash
+npx @insforge/cli config plan
+npx @insforge/cli config plan --file insforge.toml
+```
+
+#### `npx @insforge/cli config apply`
+
+Apply `insforge.toml` to the live project.
+
+```bash
+npx @insforge/cli config apply
+npx @insforge/cli config apply --dry-run        # show plan, do not apply
+npx @insforge/cli config apply --auto-approve   # skip confirmation prompt
 ```
 
 ---
