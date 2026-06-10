@@ -97,6 +97,34 @@ describe('collectDeploymentFiles with .vercelignore', () => {
     expect(files.map((f) => f.path)).toEqual(['index.html']);
   });
 
+  it('aggressive negation cannot re-include built-in excludes at any depth', async () => {
+    const dir = await makeTempProject({
+      '.vercelignore': '!**\n!node_modules/**\n!packages/app/node_modules\n!.env\n!**/.env\n!debug.log\n',
+      '.env': 'SECRET=1',
+      'debug.log': 'log',
+      'node_modules/pkg/index.js': 'x',
+      'packages/app/node_modules/dep/index.js': 'x',
+      'packages/app/.env': 'SECRET=2',
+      'packages/app/src/main.ts': 'code',
+      'index.html': '<html></html>',
+    });
+    const matcher = await loadDeployIgnore(dir);
+    const files = await collectDeploymentFiles(dir, matcher);
+    expect(files.map((f) => f.path).sort()).toEqual(['index.html', 'packages/app/src/main.ts']);
+  });
+
+  it('vercelignore adds excludes on top of built-ins (union), it never replaces them', async () => {
+    const dir = await makeTempProject({
+      '.vercelignore': 'docs/\n',
+      'node_modules/pkg/index.js': 'x',
+      'docs/guide.md': 'doc',
+      'index.html': '<html></html>',
+    });
+    const matcher = await loadDeployIgnore(dir);
+    const files = await collectDeploymentFiles(dir, matcher);
+    expect(files.map((f) => f.path)).toEqual(['index.html']);
+  });
+
   it('behaves as before when no ignore file is present', async () => {
     const dir = await makeTempProject({
       'index.html': '<html></html>',
