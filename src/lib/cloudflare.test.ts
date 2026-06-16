@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCloudflareAuthorizeUrl,
   listCloudflareAccounts,
   registerCloudflareDomain,
+  upsertCloudflareDnsRecord,
 } from './cloudflare.js';
 
 describe('Cloudflare OAuth helpers', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it('builds the Cloudflare OAuth URL with PKCE and the fixed CLI callback', () => {
     const url = new URL(buildCloudflareAuthorizeUrl({
       state: 'state-123456',
@@ -31,7 +37,6 @@ describe('Cloudflare OAuth helpers', () => {
     }));
 
     expect(url.searchParams.get('client_id')).toBe('dev-client-id');
-    vi.unstubAllEnvs();
   });
 
   it('registers domains with auto-renew and WHOIS redaction enabled', async () => {
@@ -57,8 +62,6 @@ describe('Cloudflare OAuth helpers', () => {
       auto_renew: true,
       privacy_mode: 'redaction',
     });
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
   });
 
   it('lists Cloudflare accounts with the OAuth access token', async () => {
@@ -96,7 +99,102 @@ describe('Cloudflare OAuth helpers', () => {
         }),
       }),
     );
-    vi.unstubAllGlobals();
   });
 
+  it('creates a new TXT record instead of overwriting an unrelated one', async () => {
+    vi.stubEnv('CLOUDFLARE_ACCOUNT_ID', 'account-123');
+    vi.stubEnv('CLOUDFLARE_ACCESS_TOKEN', 'oauth-access-token');
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          success: true,
+          result: {
+            id: 'new-record',
+            type: 'TXT',
+            name: '_vercel.example.com',
+            content: 'vc-domain-verify=example.com,new',
+          },
+          errors: [],
+          messages: [],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        result: [
+          {
+            id: 'existing-record',
+            type: 'TXT',
+            name: '_vercel.example.com',
+            content: 'vc-domain-verify=example.com,old',
+          },
+        ],
+        errors: [],
+        messages: [],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await upsertCloudflareDnsRecord('zone-123', {
+      type: 'TXT',
+      name: '_vercel.example.com',
+      content: 'vc-domain-verify=example.com,new',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://api.cloudflare.com/client/v4/zones/zone-123/dns_records?type=TXT&name=_vercel.example.com',
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://api.cloudflare.com/client/v4/zones/zone-123/dns_records',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('updates an existing TXT record when the content already matches', async () => {
+    vi.stubEnv('CLOUDFLARE_ACCOUNT_ID', 'account-123');
+    vi.stubEnv('CLOUDFLARE_ACCESS_TOKEN', 'oauth-access-token');
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return new Response(JSON.stringify({
+          success: true,
+          result: {
+            id: 'existing-record',
+            type: 'TXT',
+            name: '_vercel.example.com',
+            content: 'vc-domain-verify=example.com,same',
+          },
+          errors: [],
+          messages: [],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        result: [
+          {
+            id: 'existing-record',
+            type: 'TXT',
+            name: '_vercel.example.com',
+            content: 'vc-domain-verify=example.com,same',
+          },
+        ],
+        errors: [],
+        messages: [],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await upsertCloudflareDnsRecord('zone-123', {
+      type: 'TXT',
+      name: '_vercel.example.com',
+      content: 'vc-domain-verify=example.com,same',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://api.cloudflare.com/client/v4/zones/zone-123/dns_records/existing-record',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
 });

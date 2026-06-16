@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDnsSetupRecords,
+  confirmPurchase,
   hasExplicitPurchaseConfirmation,
   type DnsSetupRecord,
 } from './index.js';
@@ -90,5 +91,19 @@ describe('domains command helpers', () => {
         confirmNonRefundable: true,
       }),
     ).toBe(false);
+  });
+
+  it('rejects non-interactive purchases without explicit confirmation flags', async () => {
+    await expect(confirmPurchase('example.dev', {
+      name: 'example.dev',
+      registrable: true,
+      pricing: {
+        currency: 'USD',
+        registration_cost: '10.11',
+        renewal_cost: '10.11',
+      },
+    }, {})).rejects.toMatchObject({
+      code: 'DOMAIN_PURCHASE_CONFIRMATION_REQUIRED',
+    });
   });
 });

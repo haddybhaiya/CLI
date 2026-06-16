@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CLIError } from './errors.js';
@@ -134,6 +134,15 @@ function generateState(): string {
   return base64url(randomBytes(32));
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 export function buildCloudflareAuthorizeUrl(params: {
   clientId?: string;
   redirectUri?: string;
@@ -152,7 +161,7 @@ export function buildCloudflareAuthorizeUrl(params: {
   return url.toString();
 }
 
-function startCloudflareCallbackServer(): Promise<{
+function startCloudflareCallbackServer(expectedState: string): Promise<{
   result: Promise<CloudflareOAuthCallbackResult>;
   close: () => void;
 }> {
@@ -176,8 +185,9 @@ function startCloudflareCallbackServer(): Promise<{
       const error = url.searchParams.get('error');
       if (error) {
         const desc = url.searchParams.get('error_description') ?? error;
+        const safeDesc = escapeHtml(desc);
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<html><body><h2>Cloudflare authorization failed</h2><p>${desc}</p><p>You can close this window.</p></body></html>`);
+        res.end(`<html><body><h2>Cloudflare authorization failed</h2><p>${safeDesc}</p><p>You can close this window.</p></body></html>`);
         rejectResult(new Error(desc));
         return;
       }
@@ -187,6 +197,12 @@ function startCloudflareCallbackServer(): Promise<{
       if (!code || !state) {
         res.writeHead(400, { 'Content-Type': 'text/html' });
         res.end('<html><body><h2>Invalid Cloudflare callback</h2><p>Missing authorization code.</p></body></html>');
+        rejectResult(new Error('Invalid Cloudflare callback: missing authorization code or state.'));
+        return;
+      }
+      if (state !== expectedState) {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<html><body><h2>Invalid Cloudflare callback</h2><p>State mismatch.</p></body></html>');
         return;
       }
 
@@ -208,7 +224,9 @@ function startCloudflareCallbackServer(): Promise<{
         result: resultPromise,
         close: () => {
           server.close();
-          server.closeAllConnections();
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
         },
       });
     });
@@ -306,6 +324,7 @@ function isExpiringSoon(creds: CloudflareCredentials): boolean {
 export function saveCloudflareCredentials(creds: CloudflareCredentials): void {
   ensureGlobalDir();
   writeFileSync(CLOUDFLARE_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  chmodSync(CLOUDFLARE_FILE, 0o600);
 }
 
 export function getCloudflareCredentials(): CloudflareCredentials | null {
@@ -319,7 +338,12 @@ export function getCloudflareCredentials(): CloudflareCredentials | null {
     return null;
   }
 
-  const raw = JSON.parse(readFileSync(CLOUDFLARE_FILE, 'utf-8')) as Partial<CloudflareCredentials>;
+  let raw: Partial<CloudflareCredentials>;
+  try {
+    raw = JSON.parse(readFileSync(CLOUDFLARE_FILE, 'utf-8')) as Partial<CloudflareCredentials>;
+  } catch {
+    return null;
+  }
   if (!raw.accountId || !raw.accessToken) {
     return null;
   }
@@ -355,7 +379,7 @@ export async function performCloudflareOAuthLogin(params: {
 }): Promise<CloudflareCredentials> {
   const pkce = generatePkce();
   const state = generateState();
-  const { result, close } = await startCloudflareCallbackServer();
+  const { result, close } = await startCloudflareCallbackServer(state);
   const authUrl = buildCloudflareAuthorizeUrl({
     state,
     codeChallenge: pkce.codeChallenge,
@@ -373,10 +397,6 @@ export async function performCloudflareOAuthLogin(params: {
 
   try {
     const callback = await result;
-    if (callback.state !== state) {
-      throw new CLIError('Cloudflare OAuth state mismatch.', 1, 'CLOUDFLARE_OAUTH_STATE_MISMATCH');
-    }
-
     const tokens = await exchangeCloudflareOAuthCode({
       code: callback.code,
       codeVerifier: pkce.codeVerifier,
@@ -572,7 +592,8 @@ export async function listCloudflareDnsRecords(
   const params = new URLSearchParams();
   if (filters.type) params.set('type', filters.type);
   if (filters.name) params.set('name', filters.name);
-  const suffix = params.size > 0 ? `?${params.toString()}` : '';
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
   return cloudflareFetch<CloudflareDnsRecord[]>(`/zones/${zoneId}/dns_records${suffix}`);
 }
 
@@ -591,7 +612,10 @@ export async function upsertCloudflareDnsRecord(
     ttl: record.ttl ?? 1,
     proxied: record.proxied ?? false,
   };
-  const current = existing.find((entry) => entry.content === record.content) ?? existing[0];
+  const exact = existing.find((entry) => entry.content === record.content);
+  const current = record.type.toUpperCase() === 'TXT'
+    ? exact
+    : exact ?? existing[0];
   if (current) {
     return cloudflareFetch<CloudflareDnsRecord>(
       `/zones/${zoneId}/dns_records/${current.id}`,

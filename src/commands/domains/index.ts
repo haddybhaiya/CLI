@@ -13,6 +13,7 @@ import {
   upsertCloudflareDnsRecord,
   type CloudflareAccount,
   type CloudflareDomainCandidate,
+  type CloudflareRegistration,
   type CloudflareRegistrationWorkflow,
 } from '../../lib/cloudflare.js';
 import { requireAuth } from '../../lib/credentials.js';
@@ -127,7 +128,7 @@ export function hasExplicitPurchaseConfirmation(
     opts.confirmNonRefundable === true;
 }
 
-async function confirmPurchase(
+export async function confirmPurchase(
   domain: string,
   candidate: CloudflareDomainCandidate,
   opts: PurchaseConfirmationOptions,
@@ -216,6 +217,17 @@ async function verifyInsForgeCustomDomain(domain: string): Promise<CustomDomain>
     method: 'POST',
   });
   return await res.json() as CustomDomain;
+}
+
+async function getOptionalCloudflareRegistration(domain: string): Promise<CloudflareRegistration | null> {
+  try {
+    return await getCloudflareRegistration(domain);
+  } catch (err) {
+    if (err instanceof CLIError && err.statusCode === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 async function syncCloudflareDns(domain: CustomDomain): Promise<DnsSetupRecord[]> {
@@ -434,26 +446,15 @@ export function registerDomainsCommands(program: Command): void {
       const baseTelemetry = { tld: getTld(domain) };
       try {
         const pollSeconds = parsePositiveInteger(opts.pollSeconds, '--poll-seconds', 0);
-        const telemetry = {
-          ...baseTelemetry,
-          poll_seconds: pollSeconds,
-          confirmed: Boolean(hasExplicitPurchaseConfirmation(domain, {
-            name: domain,
-            registrable: true,
-            pricing: {
-              currency: opts.confirmCurrency ?? '',
-              registration_cost: opts.confirmPrice ?? '',
-              renewal_cost: opts.confirmPrice ?? '',
-            },
-          }, opts)),
-        };
         const workflow = await registerAfterCheck(
           domain,
           opts,
           pollSeconds,
         );
         await trackDomainUsage('buy', true, {
-          ...telemetry,
+          ...baseTelemetry,
+          poll_seconds: pollSeconds,
+          confirmed: true,
           registration_state: workflow.state,
           registration_completed: workflow.completed,
         });
@@ -553,7 +554,7 @@ export function registerDomainsCommands(program: Command): void {
         await requireAuth(apiUrl);
         const attached = await getInsForgeCustomDomain(domain);
         const registration = opts.cloudflare
-          ? await getCloudflareRegistration(domain).catch(() => null)
+          ? await getOptionalCloudflareRegistration(domain)
           : null;
         await trackDomainUsage('status', true, {
           ...telemetry,
@@ -632,19 +633,6 @@ export function registerDomainsCommands(program: Command): void {
       try {
         await requireAuth(apiUrl);
         const pollSeconds = parsePositiveInteger(opts.pollSeconds, '--poll-seconds', 90);
-        const telemetry = {
-          ...baseTelemetry,
-          poll_seconds: pollSeconds,
-          confirmed: Boolean(hasExplicitPurchaseConfirmation(domain, {
-            name: domain,
-            registrable: true,
-            pricing: {
-              currency: opts.confirmCurrency ?? '',
-              registration_cost: opts.confirmPrice ?? '',
-              renewal_cost: opts.confirmPrice ?? '',
-            },
-          }, opts)),
-        };
         const registration = await registerAfterCheck(
           domain,
           opts,
@@ -656,7 +644,9 @@ export function registerDomainsCommands(program: Command): void {
         const dnsRecords = await syncCloudflareDns(attached);
         const verified = await verifyInsForgeCustomDomain(domain);
         await trackDomainUsage('buy_and_attach', true, {
-          ...telemetry,
+          ...baseTelemetry,
+          poll_seconds: pollSeconds,
+          confirmed: true,
           registration_state: registration.state,
           registration_completed: registration.completed,
           result_count: dnsRecords.length,
