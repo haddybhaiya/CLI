@@ -77,6 +77,7 @@ import { registerPaymentsCommands } from './commands/payments/index.js';
 import { registerPosthogSetupCommand } from './commands/posthog/setup.js';
 import { registerConfigCommand } from './commands/config/index.js';
 import { registerAiCommands } from './commands/ai/index.js';
+import { registerDomainsCommands } from './commands/domains/index.js';
 import { registerMemoryCommands } from './commands/memory/index.js';
 import { guardHook } from './lib/guard/index.js';
 
@@ -224,6 +225,9 @@ registerPosthogSetupCommand(posthogCmd);
 // AI commands
 const aiCmd = program.command('ai').description('Manage AI model gateway setup');
 registerAiCommands(aiCmd);
+
+// Domain commands
+registerDomainsCommands(program);
 
 const memoryCmd = program.command('memory').description('Store and recall durable agent memories');
 registerMemoryCommands(memoryCmd);
