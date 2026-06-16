@@ -5,6 +5,7 @@ import { getProjectConfig } from '../../lib/config.js';
 import { requireAuth } from '../../lib/credentials.js';
 import { handleError, getRootOpts, CLIError, ProjectNotLinkedError } from '../../lib/errors.js';
 import { outputJson, outputSuccess } from '../../lib/output.js';
+import { mimeTypeFromName } from '../../lib/mime.js';
 
 export function registerStorageUploadCommand(storageCmd: Command): void {
   storageCmd
@@ -12,6 +13,7 @@ export function registerStorageUploadCommand(storageCmd: Command): void {
     .description('Upload a file to a storage bucket')
     .requiredOption('--bucket <name>', 'Target bucket name')
     .option('--key <objectKey>', 'Object key (defaults to filename)')
+    .option('--content-type <type>', 'MIME type to store (defaults to one inferred from the file extension)')
     .action(async (file: string, opts, cmd) => {
       const { json } = getRootOpts(cmd);
       try {
@@ -28,9 +30,16 @@ export function registerStorageUploadCommand(storageCmd: Command): void {
         const objectKey = opts.key ?? basename(file);
         const bucketName = opts.bucket;
 
-        // Build multipart form data
+        // Resolve the content type: explicit flag wins, then infer from the
+        // file's extension. Without this a typeless Blob is stored as
+        // application/octet-stream regardless of the actual file type.
+        const contentType =
+          opts.contentType ?? mimeTypeFromName(file) ?? 'application/octet-stream';
+
+        // Build multipart form data. The Blob's type becomes the multipart
+        // part's Content-Type, which the backend stores as the object's MIME type.
         const formData = new FormData();
-        const blob = new Blob([fileContent]);
+        const blob = new Blob([fileContent], { type: contentType });
         formData.append('file', blob, objectKey);
 
         // PUT /api/storage/buckets/{bucket}/objects/{key} for named upload
