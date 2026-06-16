@@ -543,6 +543,61 @@ npx @insforge/cli deployments env delete <id>                # delete a variable
 
 ---
 
+### Domains — `npx @insforge/cli domains`
+
+Register a domain through the user's Cloudflare account, attach it to the linked InsForge deployment, sync Cloudflare DNS records, and verify SSL/custom domain readiness.
+
+Cloudflare is connected through OAuth and saved locally in `~/.insforge/cloudflare.json`:
+
+```bash
+npx @insforge/cli domains cloudflare login
+npx @insforge/cli domains cloudflare login --account-id <cloudflare-account-id>  # skip account selection
+```
+
+The CLI opens Cloudflare in the browser, receives the OAuth callback on
+`http://127.0.0.1:8787/callback`, stores the returned Cloudflare tokens locally,
+and discovers the Cloudflare account selected during authorization. For
+non-browser environments, pass `--skip-browser` and open the printed URL
+manually. `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_ACCESS_TOKEN` can override the
+local OAuth credentials for automation.
+
+Use the split commands when you want to inspect or resume a workflow:
+
+```bash
+npx @insforge/cli domains search my-app
+npx @insforge/cli domains search my-app --tlds com,app,dev   # optional local filter
+npx @insforge/cli domains check my-app.dev
+npx @insforge/cli domains buy my-app.dev
+npx @insforge/cli domains attach my-app.dev
+npx @insforge/cli domains dns sync my-app.dev
+npx @insforge/cli domains verify my-app.dev
+npx @insforge/cli domains status my-app.dev --cloudflare
+```
+
+Cloudflare only allows programmatic registration for TLDs currently supported
+by its Registrar API. The CLI surfaces Cloudflare's availability reason when a
+TLD is dashboard-only or not supported by the API.
+
+For agent runs, use explicit purchase confirmations. The global `--yes` flag does not bypass domain purchase confirmation:
+
+```bash
+npx @insforge/cli domains buy-and-attach my-app.dev \
+  --confirm-domain my-app.dev \
+  --confirm-price 10.11 \
+  --confirm-currency USD \
+  --confirm-cloudflare-billing \
+  --confirm-non-refundable \
+  --json
+```
+
+If Cloudflare registration is still in progress, retry with:
+
+```bash
+npx @insforge/cli domains resume my-app.dev
+```
+
+---
+
 ### Payments — `npx @insforge/cli payments`
 
 Manage the payments foundation for the linked InsForge project. Provider-specific commands live under `payments stripe` and `payments razorpay`. These commands are intended for developers and agents configuring provider keys, syncing mirrored provider state, inspecting customers, and managing provider catalog records. Runtime checkout/order/subscription calls should usually be made from the app via the SDK.
