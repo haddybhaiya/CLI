@@ -35,6 +35,7 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
       const { json } = getRootOpts(cmd);
       const action = opts.remove ? 'remove' : slug ? 'set' : 'show';
       let success = false;
+      let commandFailed = false;
       let commandError: unknown;
       try {
         await requireAuth();
@@ -74,6 +75,7 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
         }
         success = true;
       } catch (err) {
+        commandFailed = true;
         commandError = err;
       } finally {
         try {
@@ -82,6 +84,6 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
           // Telemetry should never affect command behavior.
         }
       }
-      if (commandError) handleError(commandError, json);
+      if (commandFailed) handleError(commandError, json);
     });
 }
