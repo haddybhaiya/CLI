@@ -14,8 +14,6 @@ export function registerDeploymentsMetadataCommand(deploymentsCmd: Command): voi
     .action(async (_opts, cmd) => {
       const { json } = getRootOpts(cmd);
       let success = false;
-      let commandFailed = false;
-      let commandError: unknown;
       try {
         await requireAuth();
         if (!getProjectConfig()) throw new ProjectNotLinkedError();
@@ -37,15 +35,17 @@ export function registerDeploymentsMetadataCommand(deploymentsCmd: Command): voi
         }
         success = true;
       } catch (err) {
-        commandFailed = true;
-        commandError = err;
-      } finally {
+        void trackDeploymentUsage('metadata', false).catch(() => {
+          // Telemetry should never affect command behavior.
+        });
+        handleError(err, json);
+      }
+      if (success) {
         try {
-          await trackDeploymentUsage('metadata', success);
+          await trackDeploymentUsage('metadata', true);
         } catch {
           // Telemetry should never affect command behavior.
         }
       }
-      if (commandFailed) handleError(commandError, json);
     });
 }
