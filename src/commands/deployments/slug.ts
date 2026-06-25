@@ -35,8 +35,6 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
       const { json } = getRootOpts(cmd);
       const action = opts.remove ? 'remove' : slug ? 'set' : 'show';
       let success = false;
-      let commandFailed = false;
-      let commandError: unknown;
       try {
         await requireAuth();
         if (!getProjectConfig()) throw new ProjectNotLinkedError();
@@ -54,6 +52,11 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
             console.log(`Current slug: ${currentSlug ?? '(none)'}`);
           }
           success = true;
+          try {
+            await trackDeploymentUsage('slug', true, { action });
+          } catch {
+            // Telemetry should never affect command behavior.
+          }
           return;
         }
 
@@ -75,15 +78,17 @@ export function registerDeploymentsSlugCommand(deploymentsCmd: Command): void {
         }
         success = true;
       } catch (err) {
-        commandFailed = true;
-        commandError = err;
-      } finally {
+        void trackDeploymentUsage('slug', false, { action }).catch(() => {
+          // Telemetry should never affect command behavior.
+        });
+        handleError(err, json);
+      }
+      if (success) {
         try {
-          await trackDeploymentUsage('slug', success, { action });
+          await trackDeploymentUsage('slug', true, { action });
         } catch {
           // Telemetry should never affect command behavior.
         }
       }
-      if (commandFailed) handleError(commandError, json);
     });
 }
