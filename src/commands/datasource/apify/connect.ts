@@ -106,7 +106,12 @@ async function runConnect(opts: RunConnectOpts): Promise<ConnectResult> {
   // immediately usable — no manual `apify login` browser flow required.
   // Gracefully degraded: a failure here never blocks the connect result.
   try {
-    await runApifyAuthBridge(opts.json);
+    const { skillsInstalled } = await runApifyAuthBridge(opts.json);
+    if (!opts.json && !skillsInstalled) {
+      clack.log.warn(
+        'Agent skills did not install. Re-run `insforge datasource apify login`, or install manually with `npx skills add apify/agent-skills`.',
+      );
+    }
   } catch {
     if (!opts.json) {
       clack.log.warn(
