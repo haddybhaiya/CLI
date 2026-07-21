@@ -32,6 +32,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Clamp canvas to the live terminal so frames never wrap mid-line. */
+export function resolveForgerRenderSize(
+  canvasWidth: number,
+  canvasHeight: number,
+  columns: number | undefined = process.stdout.columns,
+  rows: number | undefined = process.stdout.rows,
+): { width: number; height: number } {
+  const cols = columns ?? 0;
+  const termRows = rows ?? 0;
+  // Unknown size (0): keep the asset canvas. Otherwise crop to fit.
+  return {
+    width: cols > 0 ? Math.min(canvasWidth, cols) : canvasWidth,
+    height: termRows > 0 ? Math.min(canvasHeight, termRows) : canvasHeight,
+  };
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const normalized = hex.replace('#', '');
   return [
@@ -89,8 +105,7 @@ export async function playForgerAnimation(): Promise<void> {
   if (!process.stdout.isTTY) return;
 
   const animation = JSON.parse(readFileSync(FORGER_ASSET_URL, 'utf-8')) as AnimationFile;
-  const width = animation.canvas.width;
-  const height = animation.canvas.height;
+  const { width, height } = resolveForgerRenderSize(animation.canvas.width, animation.canvas.height);
   const fallbackDuration = 1000 / (animation.animation?.frameRate ?? 30);
   const colorCache = new Map<string, [number, number, number]>();
 
