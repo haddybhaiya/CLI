@@ -11,12 +11,13 @@ import {
   createProject,
   getProject,
   getProjectApiKey,
+  NETWORK_ERROR_CODE,
 } from '../lib/api/platform.js';
 import { getAnonKey, runRawSql } from '../lib/api/oss.js';
 import { applyAuthProvider, VALID_AUTH_PROVIDERS, type AuthProvider } from '../auth-providers/apply.js';
 import { getGlobalConfig, saveGlobalConfig, saveProjectConfig, getFrontendUrl, buildOssHost } from '../lib/config.js';
 import { requireAuth } from '../lib/credentials.js';
-import { handleError, getRootOpts, CLIError } from '../lib/errors.js';
+import { handleError, getRootOpts, CLIError, isTransientApiError } from '../lib/errors.js';
 import { outputJson } from '../lib/output.js';
 import { readEnvFile } from '../lib/env.js';
 import { installSkills, reportCliUsage } from '../lib/skills.js';
@@ -37,14 +38,79 @@ const SAFE_MARKETPLACE_SLUG = /^[a-z0-9][a-z0-9-]{0,99}$/;
 
 export type Framework = 'react' | 'nextjs';
 
-async function waitForProjectActive(projectId: string, apiUrl?: string, timeoutMs = 120_000): Promise<void> {
+const PROJECT_POLL_INTERVAL_MS = 3_000;
+const PROJECT_POLL_TIMEOUT_MS = 120_000;
+const PROXY_STATUSES = new Set([502, 503, 504]);
+
+/**
+ * Wait for project provisioning without mistaking a transient control-plane
+ * read failure for a failed creation.
+ */
+export async function waitForProjectActive(
+  projectId: string,
+  apiUrl?: string,
+  timeoutMs = PROJECT_POLL_TIMEOUT_MS,
+): Promise<void> {
   const start = Date.now();
+  let lastTransientError: CLIError | undefined;
   while (Date.now() - start < timeoutMs) {
-    const project = await getProject(projectId, apiUrl);
-    if (project.status === 'active') return;
-    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const project = await getProject(projectId, apiUrl);
+      // A successful control-plane read means a previous transient error is
+      // no longer useful when explaining a later provisioning timeout.
+      lastTransientError = undefined;
+      if (project.status === 'active') return;
+    } catch (err) {
+      if (!isTransientApiError(err)) throw err;
+      // Keep polling through the configured deadline: a temporary control
+      // plane outage must not turn into an early create failure. If it never
+      // recovers, preserve the last classified API error at the deadline.
+      lastTransientError = err as CLIError;
+    }
+    await new Promise((r) => setTimeout(r, PROJECT_POLL_INTERVAL_MS));
+  }
+  if (lastTransientError) {
+    throw new CLIError(
+      `Project activation timed out. Last control-plane error: ${lastTransientError.message}`,
+      1,
+      'PROJECT_ACTIVATION_TIMEOUT',
+    );
   }
   throw new CLIError('Project creation timed out. Check the dashboard for status.');
+}
+
+/** A 502/503/504 or a lost transport response says nothing reliable about the POST outcome. */
+export function isAmbiguousProjectCreateFailure(err: unknown): boolean {
+  if (!(err instanceof CLIError)) return false;
+  return err.code === NETWORK_ERROR_CODE ||
+    (err.statusCode !== undefined && PROXY_STATUSES.has(err.statusCode));
+}
+
+/**
+ * A gateway or transport failure can arrive after the platform accepted the
+ * POST. The create-project API exposes no request correlation or idempotency
+ * key, so a later project-list result cannot prove ownership. Never adopt a
+ * name/time match: that could attach the caller to a collaborator's project.
+ */
+export async function createProjectOrReportAmbiguousResult(
+  orgId: string,
+  name: string,
+  region: string | undefined,
+  apiUrl: string | undefined,
+): Promise<Awaited<ReturnType<typeof createProject>>> {
+  try {
+    return await createProject(orgId, name, region, apiUrl);
+  } catch (err) {
+    if (!isAmbiguousProjectCreateFailure(err)) throw err;
+    const apiError = err as CLIError;
+    throw new CLIError(
+      'Project creation may have succeeded, but the platform did not return a result. ' +
+      'Run `insforge list --json` before retrying to avoid creating a duplicate project.',
+      apiError.exitCode,
+      'PROJECT_CREATE_RESULT_UNKNOWN',
+      apiError.statusCode,
+    );
+  }
 }
 
 const INSFORGE_BANNER = [
@@ -348,7 +414,7 @@ export function registerCreateCommand(program: Command): void {
         try {
           s?.start('Creating project...');
 
-        const project = await createProject(orgId, projectName, opts.region, apiUrl);
+        const project = await createProjectOrReportAmbiguousResult(orgId, projectName, opts.region, apiUrl);
 
         s?.message('Waiting for project to become active...');
         await waitForProjectActive(project.id, apiUrl);
