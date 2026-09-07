@@ -8,7 +8,6 @@ import * as clack from '@clack/prompts';
 import * as prompts from '../lib/prompts.js';
 import {
   listOrganizations,
-  listProjects,
   createProject,
   getProject,
   getProjectApiKey,
@@ -24,7 +23,7 @@ import { readEnvFile } from '../lib/env.js';
 import { installSkills, reportCliUsage } from '../lib/skills.js';
 import { captureEvent, trackCommand, shutdownAnalytics } from '../lib/analytics.js';
 import { deployProject } from './deployments/deploy.js';
-import type { Project, ProjectConfig } from '../types.js';
+import type { ProjectConfig } from '../types.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -41,16 +40,12 @@ export type Framework = 'react' | 'nextjs';
 
 const PROJECT_POLL_INTERVAL_MS = 3_000;
 const PROJECT_POLL_TIMEOUT_MS = 120_000;
+const MAX_CONSECUTIVE_TRANSIENT_PROJECT_READ_ERRORS = 3;
 const PROXY_STATUSES = new Set([502, 503, 504]);
-// Platform timestamps may be rounded more coarsely than the client clock. A
-// short window avoids rejecting the project we just created for that reason;
-// ambiguity inside the window is rejected below instead of guessed at.
-const CREATED_AT_SKEW_MS = 60_000;
 
 /**
  * Wait for project provisioning without mistaking a transient control-plane
- * read failure for a failed creation. The POST response can also be lost; that
- * case is handled by createProjectOrAdopt below.
+ * read failure for a failed creation.
  */
 export async function waitForProjectActive(
   projectId: string,
@@ -58,12 +53,27 @@ export async function waitForProjectActive(
   timeoutMs = PROJECT_POLL_TIMEOUT_MS,
 ): Promise<void> {
   const start = Date.now();
+  let consecutiveTransientErrors = 0;
   while (Date.now() - start < timeoutMs) {
     try {
       const project = await getProject(projectId, apiUrl);
+      consecutiveTransientErrors = 0;
       if (project.status === 'active') return;
     } catch (err) {
       if (!isTransientApiError(err)) throw err;
+      consecutiveTransientErrors += 1;
+      if (consecutiveTransientErrors >= MAX_CONSECUTIVE_TRANSIENT_PROJECT_READ_ERRORS) {
+        // isTransientApiError only accepts CLIError instances. Retain its
+        // status/code so a persistent rate limit or gateway failure remains
+        // actionable instead of degrading into a generic timeout.
+        const apiError = err as CLIError;
+        throw new CLIError(
+          `Could not confirm project activation after ${consecutiveTransientErrors} transient control-plane failures: ${apiError.message}`,
+          apiError.exitCode,
+          apiError.code,
+          apiError.statusCode,
+        );
+      }
     }
     await new Promise((r) => setTimeout(r, PROJECT_POLL_INTERVAL_MS));
   }
@@ -78,40 +88,29 @@ export function isAmbiguousProjectCreateFailure(err: unknown): boolean {
 }
 
 /**
- * Find only a project that could have been created by the immediately prior
- * request. Recovery requires an explicit region: without it, a same-named
- * project created by another organization member inside the clock-skew window
- * is indistinguishable from ours. This mirrors branch create's lost-response
- * recovery safeguards.
+ * A gateway or transport failure can arrive after the platform accepted the
+ * POST. The create-project API exposes no request correlation or idempotency
+ * key, so a later project-list result cannot prove ownership. Never adopt a
+ * name/time match: that could attach the caller to a collaborator's project.
  */
-export async function createProjectOrAdopt(
+export async function createProjectOrReportAmbiguousResult(
   orgId: string,
   name: string,
   region: string | undefined,
   apiUrl: string | undefined,
-): Promise<Project> {
-  const requestedAt = Date.now();
+): Promise<Awaited<ReturnType<typeof createProject>>> {
   try {
     return await createProject(orgId, name, region, apiUrl);
   } catch (err) {
     if (!isAmbiguousProjectCreateFailure(err)) throw err;
-    if (!region) throw err;
-
-    const existing = await listProjects(orgId, apiUrl)
-      .then(projects => {
-        const candidates = projects.filter(project =>
-          project.name === name &&
-          project.region === region &&
-          Date.parse(project.created_at) >= requestedAt - CREATED_AT_SKEW_MS,
-        );
-        // A concurrent matching create is indistinguishable from ours. Do not
-        // risk adopting another project's credentials or billing resource.
-        return candidates.length === 1 ? candidates[0] : undefined;
-      })
-      .catch(() => undefined);
-
-    if (!existing) throw err;
-    return existing;
+    const apiError = err as CLIError;
+    throw new CLIError(
+      'Project creation may have succeeded, but the platform did not return a result. ' +
+      'Run `insforge list --json` before retrying to avoid creating a duplicate project.',
+      apiError.exitCode,
+      'PROJECT_CREATE_RESULT_UNKNOWN',
+      apiError.statusCode,
+    );
   }
 }
 
@@ -416,7 +415,7 @@ export function registerCreateCommand(program: Command): void {
         try {
           s?.start('Creating project...');
 
-        const project = await createProjectOrAdopt(orgId, projectName, opts.region, apiUrl);
+        const project = await createProjectOrReportAmbiguousResult(orgId, projectName, opts.region, apiUrl);
 
         s?.message('Waiting for project to become active...');
         await waitForProjectActive(project.id, apiUrl);
