@@ -72,9 +72,8 @@ export async function waitForProjectActive(
   if (lastTransientError) {
     throw new CLIError(
       `Project activation timed out. Last control-plane error: ${lastTransientError.message}`,
-      lastTransientError.exitCode,
-      lastTransientError.code,
-      lastTransientError.statusCode,
+      1,
+      'PROJECT_ACTIVATION_TIMEOUT',
     );
   }
   throw new CLIError('Project creation timed out. Check the dashboard for status.');

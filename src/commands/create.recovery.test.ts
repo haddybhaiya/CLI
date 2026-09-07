@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { CLIError } from '../lib/errors.js';
+import { CLIError, isTransientApiError } from '../lib/errors.js';
 
 vi.mock('../lib/api/platform.js', () => ({
   listOrganizations: vi.fn(),
@@ -92,12 +92,16 @@ describe('create project recovery', () => {
     );
     vi.useFakeTimers();
     try {
-      const expected = expect(waitForProjectActive('project-id', undefined, 10_000)).rejects.toMatchObject({
-        message: expect.stringContaining('Last control-plane error: Request failed: 502'),
-        statusCode: 502,
-      });
+      const pending = waitForProjectActive('project-id', undefined, 10_000)
+        .catch(err => err as CLIError);
       await vi.runAllTimersAsync();
-      await expected;
+      const timeout = await pending;
+      expect(timeout).toMatchObject({
+        code: 'PROJECT_ACTIVATION_TIMEOUT',
+        message: expect.stringContaining('Last control-plane error: Request failed: 502'),
+      });
+      expect(timeout.statusCode).toBeUndefined();
+      expect(isTransientApiError(timeout)).toBe(false);
     } finally {
       vi.useRealTimers();
     }
