@@ -72,7 +72,7 @@ describe('create project recovery', () => {
       'org-id', 'demo', 'eu-central', 'https://platform.example.test',
     )).rejects.toMatchObject({
       message: expect.stringContaining(
-        "npx @insforge/cli --api-url 'https://platform.example.test' list --json",
+        'npx @insforge/cli --api-url <the exact API URL used for create> list --json',
       ),
     });
   });
@@ -84,10 +84,13 @@ describe('create project recovery', () => {
     );
     const apiUrl = 'https://platform.example.test/$(whoami)`touch-pwned`';
 
-    await expect(createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', apiUrl))
-      .rejects.toMatchObject({
-        message: expect.stringContaining(`--api-url '${apiUrl}'`),
-      });
+    const error = await createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', apiUrl)
+      .catch(err => err as CLIError);
+
+    expect(error.message).toContain(
+      'npx @insforge/cli --api-url <the exact API URL used for create> list --json',
+    );
+    expect(error.message).not.toContain(apiUrl);
   });
 
   it('never reconciles an ordinary API 500', async () => {

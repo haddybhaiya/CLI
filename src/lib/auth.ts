@@ -216,20 +216,34 @@ export function startCallbackServer(): Promise<{
       }
     });
 
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timeout);
+      server.close();
+      server.closeAllConnections();
+    };
+
+    // A callback can reject before performOAuthLogin starts awaiting it (for
+    // example, when opening the browser is cancelled). Mark it handled here
+    // so that path cannot produce an unhandled rejection.
+    void resultPromise.catch(() => {});
+
     server.listen(0, '127.0.0.1', () => {
       const addr = server.address();
       const port = typeof addr === 'object' ? addr!.port : 0;
       resolveServer({
         port,
         result: resultPromise,
-        close: () => { server.close(); server.closeAllConnections(); },
+        close,
       });
     });
 
     // Timeout after 5 minutes (unref so it doesn't keep the process alive)
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       rejectResult!(new Error('Authentication timed out. Please try again.'));
-      server.close();
+      close();
     }, 5 * 60 * 1000).unref();
   });
 }
@@ -323,12 +337,14 @@ export async function performOAuthLogin(apiUrl?: string, signal?: AbortSignal): 
     saveCredentials(creds);
 
     try {
-      const profile = await getProfile(apiUrl, signal);
+      const profile = await waitForAbort(getProfile(apiUrl, signal), signal);
+      throwIfAborted(signal);
       creds.user = profile;
       saveCredentials(creds);
       s?.stop(`Authenticated as ${profile.email}`);
       if (!isInteractive) process.stderr.write(`Authenticated as ${profile.email}\n`);
-    } catch {
+    } catch (err) {
+      if (signal?.aborted) throw err;
       s?.stop('Authenticated successfully');
       if (!isInteractive) process.stderr.write('Authenticated successfully\n');
     }
