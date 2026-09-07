@@ -72,9 +72,22 @@ describe('create project recovery', () => {
       'org-id', 'demo', 'eu-central', 'https://platform.example.test',
     )).rejects.toMatchObject({
       message: expect.stringContaining(
-        'npx @insforge/cli --api-url "https://platform.example.test" list --json',
+        "npx @insforge/cli --api-url 'https://platform.example.test' list --json",
       ),
     });
+  });
+
+  it('prevents shell expansion in a custom endpoint', async () => {
+    const platform = await import('../lib/api/platform.js');
+    (platform.createProject as Mock).mockRejectedValueOnce(
+      new CLIError('Request failed: 502', 1, undefined, 502),
+    );
+    const apiUrl = 'https://platform.example.test/$(whoami)`touch-pwned`';
+
+    await expect(createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', apiUrl))
+      .rejects.toMatchObject({
+        message: expect.stringContaining(`--api-url '${apiUrl}'`),
+      });
   });
 
   it('never reconciles an ordinary API 500', async () => {

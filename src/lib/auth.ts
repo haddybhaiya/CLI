@@ -30,6 +30,34 @@ export interface OAuthCallbackResult {
   state: string;
 }
 
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error('Authentication aborted.');
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * Generate PKCE code_verifier and code_challenge (S256).
  */
@@ -77,6 +105,7 @@ export async function exchangeCodeForTokens(params: {
   redirectUri: string;
   clientId: string;
   codeVerifier: string;
+  signal?: AbortSignal;
 }): Promise<{ access_token: string; refresh_token: string; expires_in: number; scope: string }> {
   const tokenUrl = `${params.platformUrl}/api/oauth/v1/token`;
   let res: Response;
@@ -84,6 +113,7 @@ export async function exchangeCodeForTokens(params: {
     res = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: params.signal,
       body: JSON.stringify({
         grant_type: 'authorization_code',
         code: params.code,
@@ -111,6 +141,7 @@ export async function refreshOAuthToken(params: {
   platformUrl: string;
   refreshToken: string;
   clientId: string;
+  signal?: AbortSignal;
 }): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
   const tokenUrl = `${params.platformUrl}/api/oauth/v1/token`;
   let res: Response;
@@ -118,6 +149,7 @@ export async function refreshOAuthToken(params: {
     res = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: params.signal,
       body: JSON.stringify({
         grant_type: 'refresh_token',
         refresh_token: params.refreshToken,
@@ -207,7 +239,8 @@ export function startCallbackServer(): Promise<{
  * generate PKCE + state, start callback server, open browser, exchange code, save credentials.
  * Returns the stored credentials on success.
  */
-export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredentials> {
+export async function performOAuthLogin(apiUrl?: string, signal?: AbortSignal): Promise<StoredCredentials> {
+  throwIfAborted(signal);
   const platformUrl = getPlatformApiUrl(apiUrl);
   const config = getGlobalConfig();
   const clientId = config.oauth_client_id ?? DEFAULT_CLIENT_ID;
@@ -218,6 +251,10 @@ export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredenti
 
   // 2. Start local callback server
   const { port, result, close } = await startCallbackServer();
+  if (signal?.aborted) {
+    close();
+    throw abortError(signal);
+  }
   const redirectUri = `http://127.0.0.1:${port}/callback`;
 
   // 3. Build authorization URL
@@ -242,8 +279,12 @@ export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredenti
   // 4. Open browser (best effort — often works even from agent shells since we're on the same machine)
   try {
     const open = (await import('open')).default;
-    await open(authUrl);
-  } catch {
+    await waitForAbort(open(authUrl), signal);
+  } catch (err) {
+    if (signal?.aborted) {
+      close();
+      throw err;
+    }
     if (isInteractive) clack.log.warn('Could not open browser. Please visit the URL above.');
   }
 
@@ -253,7 +294,7 @@ export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredenti
   if (!isInteractive) process.stderr.write('Waiting for authentication...\n');
 
   try {
-    const callbackResult = await result;
+    const callbackResult = await waitForAbort(result, signal);
     close();
 
     // Verify state
@@ -270,6 +311,7 @@ export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredenti
       redirectUri,
       clientId,
       codeVerifier: pkce.code_verifier,
+      signal,
     });
 
     // 7. Save credentials and fetch profile
@@ -281,7 +323,7 @@ export async function performOAuthLogin(apiUrl?: string): Promise<StoredCredenti
     saveCredentials(creds);
 
     try {
-      const profile = await getProfile(apiUrl);
+      const profile = await getProfile(apiUrl, signal);
       creds.user = profile;
       saveCredentials(creds);
       s?.stop(`Authenticated as ${profile.email}`);

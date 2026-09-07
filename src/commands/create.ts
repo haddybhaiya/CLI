@@ -139,11 +139,15 @@ export async function createProjectOrReportAmbiguousResult(
 }
 
 function getProjectVerificationCommand(apiUrl?: string): string {
-  // JSON string quoting is accepted by the supported shells for normal URLs
-  // and prevents a custom endpoint containing shell metacharacters from
-  // changing the suggested command.
-  const apiUrlArg = apiUrl ? ` --api-url ${JSON.stringify(apiUrl)}` : '';
+  const apiUrlArg = apiUrl ? ` --api-url ${quoteForShell(apiUrl)}` : '';
   return `npx @insforge/cli${apiUrlArg} list --json`;
+}
+
+function quoteForShell(value: string): string {
+  // Both POSIX shells and PowerShell leave expansions disabled inside single
+  // quotes. The two shells escape an embedded quote differently.
+  if (process.platform === 'win32') return `'${value.replaceAll("'", "''")}'`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 const INSFORGE_BANNER = [
