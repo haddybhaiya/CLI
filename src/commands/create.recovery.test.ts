@@ -67,9 +67,11 @@ describe('create project recovery', () => {
     expect(isAmbiguousProjectCreateFailure(new CLIError('server error', 1, undefined, 500))).toBe(false);
   });
 
-  it('continues polling after a transient activation-read failure', async () => {
+  it('continues polling through three transient activation-read failures when the project recovers', async () => {
     const platform = await import('../lib/api/platform.js');
     (platform.getProject as Mock)
+      .mockRejectedValueOnce(new CLIError('Request failed: 502', 1, undefined, 502))
+      .mockRejectedValueOnce(new CLIError('Request failed: 502', 1, undefined, 502))
       .mockRejectedValueOnce(new CLIError('Request failed: 502', 1, undefined, 502))
       .mockResolvedValueOnce({ ...createdProject, status: 'active' });
     vi.useFakeTimers();
@@ -80,18 +82,18 @@ describe('create project recovery', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(platform.getProject).toHaveBeenCalledTimes(2);
+    expect(platform.getProject).toHaveBeenCalledTimes(4);
   });
 
-  it('preserves an actionable error after three consecutive transient activation-read failures', async () => {
+  it('preserves the last actionable error when the activation deadline expires', async () => {
     const platform = await import('../lib/api/platform.js');
     (platform.getProject as Mock).mockRejectedValue(
       new CLIError('Request failed: 502', 1, undefined, 502),
     );
     vi.useFakeTimers();
     try {
-      const expected = expect(waitForProjectActive('project-id')).rejects.toMatchObject({
-        message: expect.stringContaining('after 3 transient control-plane failures'),
+      const expected = expect(waitForProjectActive('project-id', undefined, 10_000)).rejects.toMatchObject({
+        message: expect.stringContaining('Last control-plane error: Request failed: 502'),
         statusCode: 502,
       });
       await vi.runAllTimersAsync();
@@ -99,6 +101,6 @@ describe('create project recovery', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(platform.getProject).toHaveBeenCalledTimes(3);
+    expect(platform.getProject).toHaveBeenCalledTimes(4);
   });
 });

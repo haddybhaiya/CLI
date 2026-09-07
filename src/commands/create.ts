@@ -40,7 +40,6 @@ export type Framework = 'react' | 'nextjs';
 
 const PROJECT_POLL_INTERVAL_MS = 3_000;
 const PROJECT_POLL_TIMEOUT_MS = 120_000;
-const MAX_CONSECUTIVE_TRANSIENT_PROJECT_READ_ERRORS = 3;
 const PROXY_STATUSES = new Set([502, 503, 504]);
 
 /**
@@ -53,29 +52,30 @@ export async function waitForProjectActive(
   timeoutMs = PROJECT_POLL_TIMEOUT_MS,
 ): Promise<void> {
   const start = Date.now();
-  let consecutiveTransientErrors = 0;
+  let lastTransientError: CLIError | undefined;
   while (Date.now() - start < timeoutMs) {
     try {
       const project = await getProject(projectId, apiUrl);
-      consecutiveTransientErrors = 0;
+      // A successful control-plane read means a previous transient error is
+      // no longer useful when explaining a later provisioning timeout.
+      lastTransientError = undefined;
       if (project.status === 'active') return;
     } catch (err) {
       if (!isTransientApiError(err)) throw err;
-      consecutiveTransientErrors += 1;
-      if (consecutiveTransientErrors >= MAX_CONSECUTIVE_TRANSIENT_PROJECT_READ_ERRORS) {
-        // isTransientApiError only accepts CLIError instances. Retain its
-        // status/code so a persistent rate limit or gateway failure remains
-        // actionable instead of degrading into a generic timeout.
-        const apiError = err as CLIError;
-        throw new CLIError(
-          `Could not confirm project activation after ${consecutiveTransientErrors} transient control-plane failures: ${apiError.message}`,
-          apiError.exitCode,
-          apiError.code,
-          apiError.statusCode,
-        );
-      }
+      // Keep polling through the configured deadline: a temporary control
+      // plane outage must not turn into an early create failure. If it never
+      // recovers, preserve the last classified API error at the deadline.
+      lastTransientError = err as CLIError;
     }
     await new Promise((r) => setTimeout(r, PROJECT_POLL_INTERVAL_MS));
+  }
+  if (lastTransientError) {
+    throw new CLIError(
+      `Project activation timed out. Last control-plane error: ${lastTransientError.message}`,
+      lastTransientError.exitCode,
+      lastTransientError.code,
+      lastTransientError.statusCode,
+    );
   }
   throw new CLIError('Project creation timed out. Check the dashboard for status.');
 }
