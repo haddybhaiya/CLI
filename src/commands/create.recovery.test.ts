@@ -3,7 +3,6 @@ import { CLIError } from '../lib/errors.js';
 
 vi.mock('../lib/api/platform.js', () => ({
   listOrganizations: vi.fn(),
-  listProjects: vi.fn(),
   createProject: vi.fn(),
   getProject: vi.fn(),
   getProjectApiKey: vi.fn(),
@@ -11,7 +10,7 @@ vi.mock('../lib/api/platform.js', () => ({
 }));
 
 import {
-  createProjectOrAdopt,
+  createProjectOrReportAmbiguousResult,
   isAmbiguousProjectCreateFailure,
   waitForProjectActive,
 } from './create.js';
@@ -35,59 +34,21 @@ describe('create project recovery', () => {
     vi.clearAllMocks();
     const platform = await import('../lib/api/platform.js');
     (platform.createProject as Mock).mockResolvedValue(createdProject);
-    (platform.listProjects as Mock).mockResolvedValue([]);
     (platform.getProject as Mock).mockResolvedValue({ ...createdProject, status: 'active' });
   });
 
-  it('adopts a project created despite a gateway 502', async () => {
+  it('reports an unknown result after a gateway failure without adopting a project', async () => {
     const platform = await import('../lib/api/platform.js');
     (platform.createProject as Mock).mockRejectedValueOnce(
       new CLIError('Request failed: 502', 1, undefined, 502),
     );
-    (platform.listProjects as Mock).mockResolvedValueOnce([createdProject]);
 
-    await expect(createProjectOrAdopt('org-id', 'demo', 'eu-central', undefined))
-      .resolves.toEqual(createdProject);
-    expect(platform.listProjects).toHaveBeenCalledWith('org-id', undefined);
-  });
-
-  it('does not adopt an older or differently-regioned project', async () => {
-    const platform = await import('../lib/api/platform.js');
-    const failure = new CLIError('Request failed: 502', 1, undefined, 502);
-    (platform.createProject as Mock).mockRejectedValueOnce(failure);
-    (platform.listProjects as Mock).mockResolvedValueOnce([
-      { ...createdProject, created_at: '2020-01-01T00:00:00.000Z' },
-      { ...createdProject, id: 'other-project', region: 'us-east' },
-    ]);
-
-    await expect(createProjectOrAdopt('org-id', 'demo', 'eu-central', undefined))
-      .rejects.toBe(failure);
-  });
-
-  it('does not guess when multiple matching projects were created in the recovery window', async () => {
-    const platform = await import('../lib/api/platform.js');
-    const failure = new CLIError('Request failed: 502', 1, undefined, 502);
-    (platform.createProject as Mock).mockRejectedValueOnce(failure);
-    (platform.listProjects as Mock).mockResolvedValueOnce([
-      createdProject,
-      { ...createdProject, id: 'other-project' },
-    ]);
-
-    await expect(createProjectOrAdopt('org-id', 'demo', 'eu-central', undefined))
-      .rejects.toBe(failure);
-  });
-
-  it('does not adopt a same-named project when the requested region is unknown', async () => {
-    const platform = await import('../lib/api/platform.js');
-    const failure = new CLIError('Request failed: 502', 1, undefined, 502);
-    (platform.createProject as Mock).mockRejectedValueOnce(failure);
-    (platform.listProjects as Mock).mockResolvedValueOnce([
-      { ...createdProject, created_at: new Date(Date.now() - 30_000).toISOString() },
-    ]);
-
-    await expect(createProjectOrAdopt('org-id', 'demo', undefined, undefined))
-      .rejects.toBe(failure);
-    expect(platform.listProjects).not.toHaveBeenCalled();
+    await expect(createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', undefined))
+      .rejects.toMatchObject({
+        code: 'PROJECT_CREATE_RESULT_UNKNOWN',
+        statusCode: 502,
+        message: expect.stringContaining('insforge list --json'),
+      });
   });
 
   it('never reconciles an ordinary API 500', async () => {
@@ -95,9 +56,8 @@ describe('create project recovery', () => {
     const failure = new CLIError('Internal server error', 1, undefined, 500);
     (platform.createProject as Mock).mockRejectedValueOnce(failure);
 
-    await expect(createProjectOrAdopt('org-id', 'demo', 'eu-central', undefined))
+    await expect(createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', undefined))
       .rejects.toBe(failure);
-    expect(platform.listProjects).not.toHaveBeenCalled();
   });
 
   it('recognizes only gateway and transport failures as ambiguous', () => {
@@ -121,5 +81,24 @@ describe('create project recovery', () => {
       vi.useRealTimers();
     }
     expect(platform.getProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves an actionable error after three consecutive transient activation-read failures', async () => {
+    const platform = await import('../lib/api/platform.js');
+    (platform.getProject as Mock).mockRejectedValue(
+      new CLIError('Request failed: 502', 1, undefined, 502),
+    );
+    vi.useFakeTimers();
+    try {
+      const expected = expect(waitForProjectActive('project-id')).rejects.toMatchObject({
+        message: expect.stringContaining('after 3 transient control-plane failures'),
+        statusCode: 502,
+      });
+      await vi.runAllTimersAsync();
+      await expected;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(platform.getProject).toHaveBeenCalledTimes(3);
   });
 });
