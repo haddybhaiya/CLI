@@ -70,7 +70,7 @@ export async function platformFetch(
     // cleared) but a refresh token can mint one. Direct-API-key logins never
     // reach here — getAccessToken returns the uak_ itself.
     if (getCredentials()?.refresh_token) {
-      token = await refreshAccessToken(apiUrl);
+      token = await refreshAccessToken(apiUrl, fetchOptions.signal ?? undefined);
     }
   }
   if (!token) {
@@ -108,7 +108,7 @@ export async function platformFetch(
 
   // Auto-refresh on 401
   if (res.status === 401) {
-    const newToken = await refreshAccessToken(apiUrl);
+    const newToken = await refreshAccessToken(apiUrl, fetchOptions.signal ?? undefined);
     headers.Authorization = `Bearer ${newToken}`;
     let retryRes: Response;
     try {
@@ -170,8 +170,8 @@ export async function login(email: string, password: string, apiUrl?: string): P
   } as LoginResponse & { _refreshToken?: string };
 }
 
-export async function getProfile(apiUrl?: string): Promise<User> {
-  const res = await platformFetch('/auth/v1/profile', {}, apiUrl);
+export async function getProfile(apiUrl?: string, signal?: AbortSignal): Promise<User> {
+  const res = await platformFetch('/auth/v1/profile', { signal }, apiUrl);
   const data = await res.json() as { user?: User };
   return data.user ?? (data as unknown as User);
 }
