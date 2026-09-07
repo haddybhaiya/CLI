@@ -8,21 +8,23 @@ import * as clack from '@clack/prompts';
 import * as prompts from '../lib/prompts.js';
 import {
   listOrganizations,
+  listProjects,
   createProject,
   getProject,
   getProjectApiKey,
+  NETWORK_ERROR_CODE,
 } from '../lib/api/platform.js';
 import { getAnonKey, runRawSql } from '../lib/api/oss.js';
 import { applyAuthProvider, VALID_AUTH_PROVIDERS, type AuthProvider } from '../auth-providers/apply.js';
 import { getGlobalConfig, saveGlobalConfig, saveProjectConfig, getFrontendUrl, buildOssHost } from '../lib/config.js';
 import { requireAuth } from '../lib/credentials.js';
-import { handleError, getRootOpts, CLIError } from '../lib/errors.js';
+import { handleError, getRootOpts, CLIError, isTransientApiError } from '../lib/errors.js';
 import { outputJson } from '../lib/output.js';
 import { readEnvFile } from '../lib/env.js';
 import { installSkills, reportCliUsage } from '../lib/skills.js';
 import { captureEvent, trackCommand, shutdownAnalytics } from '../lib/analytics.js';
 import { deployProject } from './deployments/deploy.js';
-import type { ProjectConfig } from '../types.js';
+import type { Project, ProjectConfig } from '../types.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -37,14 +39,80 @@ const SAFE_MARKETPLACE_SLUG = /^[a-z0-9][a-z0-9-]{0,99}$/;
 
 export type Framework = 'react' | 'nextjs';
 
-async function waitForProjectActive(projectId: string, apiUrl?: string, timeoutMs = 120_000): Promise<void> {
+const PROJECT_POLL_INTERVAL_MS = 3_000;
+const PROJECT_POLL_TIMEOUT_MS = 120_000;
+const PROXY_STATUSES = new Set([502, 503, 504]);
+// Platform timestamps may be rounded more coarsely than the client clock. A
+// short window avoids rejecting the project we just created for that reason;
+// ambiguity inside the window is rejected below instead of guessed at.
+const CREATED_AT_SKEW_MS = 60_000;
+
+/**
+ * Wait for project provisioning without mistaking a transient control-plane
+ * read failure for a failed creation. The POST response can also be lost; that
+ * case is handled by createProjectOrAdopt below.
+ */
+export async function waitForProjectActive(
+  projectId: string,
+  apiUrl?: string,
+  timeoutMs = PROJECT_POLL_TIMEOUT_MS,
+): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const project = await getProject(projectId, apiUrl);
-    if (project.status === 'active') return;
-    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const project = await getProject(projectId, apiUrl);
+      if (project.status === 'active') return;
+    } catch (err) {
+      if (!isTransientApiError(err)) throw err;
+    }
+    await new Promise((r) => setTimeout(r, PROJECT_POLL_INTERVAL_MS));
   }
   throw new CLIError('Project creation timed out. Check the dashboard for status.');
+}
+
+/** A 502/503/504 or a lost transport response says nothing reliable about the POST outcome. */
+export function isAmbiguousProjectCreateFailure(err: unknown): boolean {
+  if (!(err instanceof CLIError)) return false;
+  return err.code === NETWORK_ERROR_CODE ||
+    (err.statusCode !== undefined && PROXY_STATUSES.has(err.statusCode));
+}
+
+/**
+ * Find only a project that could have been created by the immediately prior
+ * request. Recovery requires an explicit region: without it, a same-named
+ * project created by another organization member inside the clock-skew window
+ * is indistinguishable from ours. This mirrors branch create's lost-response
+ * recovery safeguards.
+ */
+export async function createProjectOrAdopt(
+  orgId: string,
+  name: string,
+  region: string | undefined,
+  apiUrl: string | undefined,
+): Promise<Project> {
+  const requestedAt = Date.now();
+  try {
+    return await createProject(orgId, name, region, apiUrl);
+  } catch (err) {
+    if (!isAmbiguousProjectCreateFailure(err)) throw err;
+    if (!region) throw err;
+
+    const existing = await listProjects(orgId, apiUrl)
+      .then(projects => {
+        const candidates = projects.filter(project =>
+          project.name === name &&
+          project.region === region &&
+          Date.parse(project.created_at) >= requestedAt - CREATED_AT_SKEW_MS,
+        );
+        // A concurrent matching create is indistinguishable from ours. Do not
+        // risk adopting another project's credentials or billing resource.
+        return candidates.length === 1 ? candidates[0] : undefined;
+      })
+      .catch(() => undefined);
+
+    if (!existing) throw err;
+    return existing;
+  }
 }
 
 const INSFORGE_BANNER = [
@@ -348,7 +416,7 @@ export function registerCreateCommand(program: Command): void {
         try {
           s?.start('Creating project...');
 
-        const project = await createProject(orgId, projectName, opts.region, apiUrl);
+        const project = await createProjectOrAdopt(orgId, projectName, opts.region, apiUrl);
 
         s?.message('Waiting for project to become active...');
         await waitForProjectActive(project.id, apiUrl);
