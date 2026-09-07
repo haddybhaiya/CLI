@@ -192,8 +192,12 @@ export async function listProjects(orgId: string, apiUrl?: string): Promise<Proj
   return data.projects ?? (data as unknown as Project[]);
 }
 
-export async function getProject(projectId: string, apiUrl?: string): Promise<Project> {
-  const res = await platformFetch(`/projects/v1/${projectId}`, {}, apiUrl);
+export async function getProject(
+  projectId: string,
+  apiUrl?: string,
+  signal?: AbortSignal,
+): Promise<Project> {
+  const res = await platformFetch(`/projects/v1/${projectId}`, { signal }, apiUrl);
   const data = await res.json() as { project?: Project };
   return data.project ?? (data as unknown as Project);
 }

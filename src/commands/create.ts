@@ -51,23 +51,41 @@ export async function waitForProjectActive(
   apiUrl?: string,
   timeoutMs = PROJECT_POLL_TIMEOUT_MS,
 ): Promise<void> {
-  const start = Date.now();
+  const deadline = Date.now() + timeoutMs;
   let lastTransientError: CLIError | undefined;
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
+    const remainingBeforeRequest = deadline - Date.now();
+    if (remainingBeforeRequest <= 0) break;
+
+    const controller = new AbortController();
+    let requestTimedOut = false;
+    const abortTimer = setTimeout(() => {
+      requestTimedOut = true;
+      controller.abort();
+    }, remainingBeforeRequest);
     try {
-      const project = await getProject(projectId, apiUrl);
+      const project = await getProject(projectId, apiUrl, controller.signal);
+      // A request that completes after the deadline cannot establish that the
+      // project became active within the configured activation window.
+      if (Date.now() >= deadline) break;
       // A successful control-plane read means a previous transient error is
       // no longer useful when explaining a later provisioning timeout.
       lastTransientError = undefined;
       if (project.status === 'active') return;
     } catch (err) {
+      if (requestTimedOut || Date.now() >= deadline) break;
       if (!isTransientApiError(err)) throw err;
       // Keep polling through the configured deadline: a temporary control
       // plane outage must not turn into an early create failure. If it never
       // recovers, preserve the last classified API error at the deadline.
       lastTransientError = err as CLIError;
+    } finally {
+      clearTimeout(abortTimer);
     }
-    await new Promise((r) => setTimeout(r, PROJECT_POLL_INTERVAL_MS));
+
+    const remainingBeforeSleep = deadline - Date.now();
+    if (remainingBeforeSleep <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(PROJECT_POLL_INTERVAL_MS, remainingBeforeSleep)));
   }
   if (lastTransientError) {
     throw new CLIError(
@@ -76,11 +94,18 @@ export async function waitForProjectActive(
       'PROJECT_ACTIVATION_TIMEOUT',
     );
   }
-  throw new CLIError('Project creation timed out. Check the dashboard for status.');
+  throw new CLIError(
+    'Project activation timed out. Check the dashboard for status.',
+    1,
+    'PROJECT_ACTIVATION_TIMEOUT',
+  );
 }
 
 /** A 502/503/504 or a lost transport response says nothing reliable about the POST outcome. */
 export function isAmbiguousProjectCreateFailure(err: unknown): boolean {
+  // createProject parses the response after a POST. A malformed body means
+  // the server may have created the project even though no result reached us.
+  if (err instanceof SyntaxError) return true;
   if (!(err instanceof CLIError)) return false;
   return err.code === NETWORK_ERROR_CODE ||
     (err.statusCode !== undefined && PROXY_STATUSES.has(err.statusCode));
@@ -102,15 +127,23 @@ export async function createProjectOrReportAmbiguousResult(
     return await createProject(orgId, name, region, apiUrl);
   } catch (err) {
     if (!isAmbiguousProjectCreateFailure(err)) throw err;
-    const apiError = err as CLIError;
+    const apiError = err instanceof CLIError ? err : undefined;
     throw new CLIError(
       'Project creation may have succeeded, but the platform did not return a result. ' +
-      'Run `insforge list --json` before retrying to avoid creating a duplicate project.',
-      apiError.exitCode,
+      `Run \`${getProjectVerificationCommand(apiUrl)}\` before retrying to avoid creating a duplicate project.`,
+      apiError?.exitCode ?? 1,
       'PROJECT_CREATE_RESULT_UNKNOWN',
-      apiError.statusCode,
+      apiError?.statusCode,
     );
   }
+}
+
+function getProjectVerificationCommand(apiUrl?: string): string {
+  // JSON string quoting is accepted by the supported shells for normal URLs
+  // and prevents a custom endpoint containing shell metacharacters from
+  // changing the suggested command.
+  const apiUrlArg = apiUrl ? ` --api-url ${JSON.stringify(apiUrl)}` : '';
+  return `npx @insforge/cli${apiUrlArg} list --json`;
 }
 
 const INSFORGE_BANNER = [

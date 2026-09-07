@@ -47,8 +47,34 @@ describe('create project recovery', () => {
       .rejects.toMatchObject({
         code: 'PROJECT_CREATE_RESULT_UNKNOWN',
         statusCode: 502,
-        message: expect.stringContaining('insforge list --json'),
+        message: expect.stringContaining('npx @insforge/cli list --json'),
       });
+  });
+
+  it('reports an unknown result when the create response cannot be decoded', async () => {
+    const platform = await import('../lib/api/platform.js');
+    (platform.createProject as Mock).mockRejectedValueOnce(new SyntaxError('Unexpected end of JSON input'));
+
+    await expect(createProjectOrReportAmbiguousResult('org-id', 'demo', 'eu-central', undefined))
+      .rejects.toMatchObject({
+        code: 'PROJECT_CREATE_RESULT_UNKNOWN',
+        message: expect.stringContaining('npx @insforge/cli list --json'),
+      });
+  });
+
+  it('keeps a one-off Platform endpoint in the recovery command', async () => {
+    const platform = await import('../lib/api/platform.js');
+    (platform.createProject as Mock).mockRejectedValueOnce(
+      new CLIError('Request failed: 502', 1, undefined, 502),
+    );
+
+    await expect(createProjectOrReportAmbiguousResult(
+      'org-id', 'demo', 'eu-central', 'https://platform.example.test',
+    )).rejects.toMatchObject({
+      message: expect.stringContaining(
+        'npx @insforge/cli --api-url "https://platform.example.test" list --json',
+      ),
+    });
   });
 
   it('never reconciles an ordinary API 500', async () => {
@@ -65,6 +91,7 @@ describe('create project recovery', () => {
     expect(isAmbiguousProjectCreateFailure(new CLIError('gateway', 1, undefined, 503))).toBe(true);
     expect(isAmbiguousProjectCreateFailure(new CLIError('invalid request', 1, undefined, 400))).toBe(false);
     expect(isAmbiguousProjectCreateFailure(new CLIError('server error', 1, undefined, 500))).toBe(false);
+    expect(isAmbiguousProjectCreateFailure(new SyntaxError('Unexpected end of JSON input'))).toBe(true);
   });
 
   it('continues polling through three transient activation-read failures when the project recovers', async () => {
@@ -92,6 +119,7 @@ describe('create project recovery', () => {
     );
     vi.useFakeTimers();
     try {
+      const startedAt = Date.now();
       const pending = waitForProjectActive('project-id', undefined, 10_000)
         .catch(err => err as CLIError);
       await vi.runAllTimersAsync();
@@ -102,9 +130,36 @@ describe('create project recovery', () => {
       });
       expect(timeout.statusCode).toBeUndefined();
       expect(isTransientApiError(timeout)).toBe(false);
+      expect(Date.now() - startedAt).toBe(10_000);
     } finally {
       vi.useRealTimers();
     }
     expect(platform.getProject).toHaveBeenCalledTimes(4);
+  });
+
+  it('aborts an in-flight status request at the activation deadline', async () => {
+    const platform = await import('../lib/api/platform.js');
+    let requestSignal: AbortSignal | undefined;
+    (platform.getProject as Mock).mockImplementation(
+      (_projectId: string, _apiUrl: string | undefined, signal: AbortSignal) => new Promise((_, reject) => {
+        requestSignal = signal;
+        signal.addEventListener('abort', () => {
+          reject(new CLIError('Request aborted', 1, 'NETWORK_ERROR'));
+        });
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      const pending = waitForProjectActive('project-id', undefined, 10_000)
+        .catch(err => err as CLIError);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const timeout = await pending;
+      expect(timeout.code).toBe('PROJECT_ACTIVATION_TIMEOUT');
+      expect(requestSignal?.aborted).toBe(true);
+      expect(Date.now() - startedAt).toBe(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
