@@ -128,9 +128,12 @@ export async function createProjectOrReportAmbiguousResult(
   } catch (err) {
     if (!isAmbiguousProjectCreateFailure(err)) throw err;
     const apiError = err instanceof CLIError ? err : undefined;
+    const apiUrlReplacement = apiUrl
+      ? ', replacing `YOUR_API_URL` with the exact value used for creation'
+      : '';
     throw new CLIError(
       'Project creation may have succeeded, but the platform did not return a result. ' +
-      `Run \`${getProjectVerificationCommand(apiUrl)}\` before retrying to avoid creating a duplicate project.`,
+      `Run \`${getProjectVerificationCommand(apiUrl)}\`${apiUrlReplacement} before retrying to avoid creating a duplicate project.`,
       apiError?.exitCode ?? 1,
       'PROJECT_CREATE_RESULT_UNKNOWN',
       apiError?.statusCode,
@@ -139,7 +142,7 @@ export async function createProjectOrReportAmbiguousResult(
 }
 
 function getProjectVerificationCommand(apiUrl?: string): string {
-  const apiUrlArg = apiUrl ? ' --api-url <the exact API URL used for create>' : '';
+  const apiUrlArg = apiUrl ? ' --api-url YOUR_API_URL' : '';
   return `npx @insforge/cli${apiUrlArg} list --json`;
 }
 

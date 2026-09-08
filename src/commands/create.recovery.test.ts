@@ -72,7 +72,7 @@ describe('create project recovery', () => {
       'org-id', 'demo', 'eu-central', 'https://platform.example.test',
     )).rejects.toMatchObject({
       message: expect.stringContaining(
-        'npx @insforge/cli --api-url <the exact API URL used for create> list --json',
+        'npx @insforge/cli --api-url YOUR_API_URL list --json',
       ),
     });
   });
@@ -88,8 +88,9 @@ describe('create project recovery', () => {
       .catch(err => err as CLIError);
 
     expect(error.message).toContain(
-      'npx @insforge/cli --api-url <the exact API URL used for create> list --json',
+      'npx @insforge/cli --api-url YOUR_API_URL list --json',
     );
+    expect(error.message).toContain('replacing `YOUR_API_URL` with the exact value used for creation');
     expect(error.message).not.toContain(apiUrl);
   });
 
