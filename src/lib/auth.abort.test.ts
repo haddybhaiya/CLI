@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const httpMock = vi.hoisted(() => {
   const state: { handler?: (req: { url?: string }, res: { writeHead: () => void; end: () => void }) => void } = {};
@@ -40,6 +40,10 @@ describe('OAuth login cancellation', () => {
     vi.clearAllMocks();
     configMock.getGlobalConfig.mockReturnValue({});
     configMock.getPlatformApiUrl.mockReturnValue('https://platform.example.test');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('cancels the callback timeout when the callback server is closed', async () => {

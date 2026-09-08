@@ -222,7 +222,9 @@ export function startCallbackServer(): Promise<{
       closed = true;
       clearTimeout(timeout);
       server.close();
-      server.closeAllConnections();
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections();
+      }
     };
 
     // A callback can reject before performOAuthLogin starts awaiting it (for
@@ -337,6 +339,7 @@ export async function performOAuthLogin(apiUrl?: string, signal?: AbortSignal): 
     saveCredentials(creds);
 
     try {
+      throwIfAborted(signal);
       const profile = await waitForAbort(getProfile(apiUrl, signal), signal);
       throwIfAborted(signal);
       creds.user = profile;
